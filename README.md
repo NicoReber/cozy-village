@@ -32,23 +32,25 @@ Claude Code with function-hook plugins (mods). The village draws best in the ter
 
 ## Install
 
-Clone the repository, then point Claude Code at the folder.
-
-For every session, add it to the `env` block of `~/.claude/settings.json`:
-
-```json
-{
-  "env": { "CLAUDE_CODE_PLUGIN_DIRS": "Z:\\Repository\\cozy-village" }
-}
-```
-
-For a single session:
+In a Claude Code terminal session, run:
 
 ```
-claude --plugin-dir Z:\Repository\cozy-village
+/plugin install cozy-village --marketplace <owner>/<repo>
 ```
 
-Then type `/village` to open the pane.
+`<owner>/<repo>` is the GitHub repository that holds this plugin. Answer `y` to add its marketplace, then pick a scope (user scope makes the village available in every session). The plugin is active right away; type `/village` to open the pane.
+
+To install from another git host or from a local clone, use its URL or path in place of `<owner>/<repo>`.
+
+### Running from a working copy
+
+While working on the plugin, load it straight from a clone instead of installing it:
+
+```
+claude --plugin-dir <path-to-your-clone>
+```
+
+To load it in every session without installing, set `CLAUDE_CODE_PLUGIN_DIRS` to the clone's path in the `env` block of your user settings (`~/.claude/settings.json`). Claude Code watches folders loaded this way and reloads the plugin when its files change.
 
 ## Playing
 

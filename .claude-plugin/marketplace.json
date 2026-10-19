@@ -1,0 +1,14 @@
+{
+  "name": "cozy-village",
+  "description": "Cozy Village, a Claude Code plugin: a village pane where an AI villager lives, steered by your wishes.",
+  "owner": {
+    "name": "Nico Reber"
+  },
+  "plugins": [
+    {
+      "name": "cozy-village",
+      "source": "./",
+      "description": "A cozy village pane where an AI villager farms, fishes and chats, steered by your wishes."
+    }
+  ]
+}
