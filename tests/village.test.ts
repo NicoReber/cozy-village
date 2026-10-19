@@ -404,3 +404,37 @@ test('without the club setting there is no club anywhere', async () => {
   expect(w.projects.club.done).toBe(false)
   expect(w.bells).toBe(3000)
 })
+
+test('a speech bubble stays where it first appeared, even when space frees up', async () => {
+  const w = createWorld()
+  w.events = []
+  w.requests = []
+  w.player.x = 50
+  w.player.y = 12
+  const rosa = w.npcs.rosa
+  // Rosa stands up and to the right, so her bubble sits where Claude's would naturally go
+  rosa.x = 64
+  rosa.y = 11
+  rosa.hold = 999
+  const find = (label: string) => {
+    const cells = frame(w, 80)
+    const want = ` ${label} `
+    for (let r = 0; r < ROWS; r++) {
+      let line = ''
+      for (let c = 0; c < 80; c++) line += String.fromCodePoint(cells[(r * 80 + c) * 3] || 32)
+      const at = line.indexOf(want)
+      if (at >= 0) return { r, c: at }
+    }
+    return null
+  }
+  rosa.bubble = { text: 'I am up here talking!', ticks: 500 }
+  const rosaFirst = find('Rosa')
+  w.player.bubble = { text: 'And I answer down here.', ticks: 500 }
+  const first = find('Claude')
+  expect(first).not.toBe(null)
+  expect(find('Rosa')).toEqual(rosaFirst)
+  rosa.bubble = undefined
+  expect(find('Claude')).toEqual(first)
+  w.player.bubble = { text: 'A new line may pick a new spot.', ticks: 500 }
+  expect(find('Claude')).not.toBe(null)
+})

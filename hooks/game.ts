@@ -2464,6 +2464,11 @@ function wrap(text: string, width: number, maxLines: number): string[] {
   return lines
 }
 
+/** Where each speaker's current bubble was put, relative to the speaker, so it stays put while it is shown. */
+const bubbleSpots = new WeakMap<object, { key: object; dx: number; dy: number; below: boolean }>()
+/** Claude's thinking bubble changes text every few frames but is one bubble. */
+const THINKING = {}
+
 export function frame(w: World, cols: number): Uint32Array {
   const rows = ROWS
   const cells = new Uint32Array(cols * rows * 3)
@@ -2638,11 +2643,11 @@ export function frame(w: World, cols: number): Uint32Array {
     }
   }
   // ---- speech bubbles: laid out together so none covers another bubble or a speaker ----
-  type Ask = { at: Pt; b: Bubble; border: number; name?: string; rank: number }
+  type Ask = { at: Pt; b: Bubble; key: object; border: number; name?: string; rank: number }
   type Box = { x0: number; y0: number; x1: number; y1: number }
   const asks: Ask[] = []
   const ask = (m: Pt, b: Bubble | undefined, border: number, name: string | undefined, rank: number) => {
-    if (b && visible(m)) asks.push({ at: m, b, border, name, rank })
+    if (b && visible(m)) asks.push({ at: m, b, key: b.text.endsWith(' hmm') && m === me && w.thinking ? THINKING : b, border, name, rank })
   }
   const thinkingBubble = w.thinking ? { text: ['.  ', '.. ', '...'][Math.floor(w.tick / 3) % 3] + ' hmm', ticks: 1 } : undefined
   ask(me, thinkingBubble ?? w.player.bubble, 0xc9a227, 'Claude', 0)
@@ -2650,8 +2655,9 @@ export function frame(w: World, cols: number): Uint32Array {
   for (const v of VILLAGERS) ask(w.npcs[v.id], w.npcs[v.id].bubble, v.color, w.npcs[v.id].bubble?.text === 'zZ' ? undefined : v.name, 1)
   if (w.merchant) ask(w.merchant, w.merchant.bubble, 0xffb300, 'Kiki', 1)
   ask(w.mochi, w.mochi.bubble, 0xb0a0a0, undefined, 2)
-  // Claude first, then the freshest lines (most ticks left), Mochi's purrs last
-  asks.sort((a, b) => a.rank - b.rank || b.b.ticks - a.b.ticks)
+  // bubbles already on screen keep their place, so they go first; then Claude, then the freshest lines, Mochi last
+  const known = (a: Ask) => (bubbleSpots.get(a.at)?.key === a.key ? 0 : 1)
+  asks.sort((a, b) => known(a) - known(b) || a.rank - b.rank || b.b.ticks - a.b.ticks)
 
   const speakers = asks.map(a => screen(a.at))
   const placed: Box[] = []
@@ -2668,7 +2674,21 @@ export function frame(w: World, cols: number): Uint32Array {
     const bw = Math.max(...lines.map(l => l.length), a.name ? a.name.length + 2 : 0) + 4
     const bh = lines.length + 2
     let spot: { left: number; top: number; below: boolean; gap: number } | undefined
-    search: for (const below of [false, true]) {
+    const kept = bubbleSpots.get(a.at)
+    if (kept && kept.key === a.key) {
+      // stay where it first appeared, unless that spot left the screen or another bubble already sits there
+      const left = sx + kept.dx
+      const top = sy + kept.dy
+      const box = { x0: left, y0: top, x1: left + bw - 1, y1: top + bh - 1 }
+      const tail = kept.below ? { x0: sx, y0: sy + 1, x1: sx, y1: top - 1 } : { x0: sx, y0: top + bh, x1: sx, y1: sy - 1 }
+      const fits = left >= 0 && left + bw <= cols && top >= 1 && top + bh - 1 <= VIEW_H && sx >= left + 1 && sx <= left + bw - 2
+      const free = !placed.some(q => box.x0 <= q.x1 && q.x0 <= box.x1 && box.y0 <= q.y1 && q.y0 <= box.y1)
+      if (fits && free) {
+        placed.push(box, tail)
+        spot = { left, top, below: kept.below, gap: 0 }
+      }
+    }
+    if (!spot) search: for (const below of [false, true]) {
       for (let gap = 0; gap <= 4; gap++) {
         for (const shift of [0, -1, 1, -2, 2]) {
           const left = Math.max(0, Math.min(cols - bw, sx - Math.floor(bw / 2) + shift * Math.floor(bw / 3)))
@@ -2680,6 +2700,7 @@ export function frame(w: World, cols: number): Uint32Array {
           if (overlaps(box) || overlaps(tail)) continue
           placed.push(box, tail)
           spot = { left, top, below, gap }
+          bubbleSpots.set(a.at, { key: a.key, dx: left - sx, dy: top - sy, below })
           break search
         }
       }
