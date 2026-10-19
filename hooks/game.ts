@@ -2504,8 +2504,10 @@ export function frame(w: World, cols: number): Uint32Array {
       const bg = shaded(w, mx, my) ? scale(raw, 0.84) : raw
       const tileHere = w.tiles[idx(mx, my)]
       const isLit = isNight && (tileHere === 'wall' || tileHere === 'item') && (fg === 0xffd54f || fg === 0xff4081)
-      const glow = isNight && lamps.some(q => Math.abs(q.x - mx) <= 2 && Math.abs(q.y - my) <= 1)
-      const here = glow ? ([Math.max(l[0], 0.9), Math.max(l[1], 0.82), Math.max(l[2], 0.62)] as [number, number, number]) : l
+      // lamplight fades with distance: brightest on the lamp, gone two cells away (rows count double)
+      const near = isNight ? Math.min(3, ...lamps.map(q => Math.max(Math.abs(q.x - mx), 2 * Math.abs(q.y - my)))) : 3
+      const warm = [0.82, 0.68, 0.56][near]
+      const here = warm ? ([Math.max(l[0], warm), Math.max(l[1], warm * 0.9), Math.max(l[2], warm * 0.7)] as [number, number, number]) : l
       put(sx, y + 1, c, isLit ? fg : tint(fg, here), tint(bg, here))
       const tile = w.tiles[idx(mx, my)]
       if (festival && tile === 'plaza' && noise(mx, my, w.tick >> 2) < 250) {
