@@ -35,12 +35,12 @@ Claude Code with function-hook plugins (mods). The village draws best in the ter
 In a Claude Code terminal session, run:
 
 ```
-/plugin install cozy-village --marketplace <owner>/<repo>
+/plugin install cozy-village --marketplace NicoReber/cozy-village
 ```
 
-`<owner>/<repo>` is the GitHub repository that holds this plugin. Answer `y` to add its marketplace, then pick a scope (user scope makes the village available in every session). The plugin is active right away; type `/village` to open the pane.
+Answer `y` to add its marketplace, then pick a scope (user scope makes the village available in every session). The plugin is active right away; type `/village` to open the pane.
 
-To install from another git host or from a local clone, use its URL or path in place of `<owner>/<repo>`.
+To install from a fork or a local clone, use its `owner/repo`, URL or path in place of `NicoReber/cozy-village`.
 
 ### Running from a working copy
 
