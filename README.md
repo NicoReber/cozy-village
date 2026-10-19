@@ -1,0 +1,119 @@
+# Cozy Village
+
+A cozy Stardew Valley / Animal Crossing style village that lives in a pane inside Claude Code.
+An AI villager named Claude farms, fishes, chats with its neighbours and takes part in village life.
+You steer it by typing wishes like *"buy pumpkin seeds and plant them"* or *"bring Rosa a flower and ask about her day"*.
+
+```
+ ☼ Spring 3 · Day 3  10:40   820 Bells   ★ fishing contest
+♣    ▗▄▐▄▄▄▄▄▖       ▗▄▄▄▄▄▄▄▄▖           ▗▄▄▄▄▄▄▄▖
+♣     ▀ ▀ ▀ ▀         ▀ ▀ ▀ ▀ ▀    ~≈      ▀ ▀ ▀ ▀ ▀
+♣     ■     ■         │  SHOP  │           │FLOWERS
+♣        ▌               │▌ │      ║       │  │▌ │
+♣         Π  ╭─ Claude ───────────╮      *  ☻  *
+♣    ω       │ A 64 cm koi!      │
+♠             ╰┬──────────────────╯
+```
+
+## What's in the village
+
+- **Claude and five neighbours**: Tom the fisherman, Rosa the florist, Bruno the carpenter, Pip the kid and Mabel from the café, plus Mochi the cat.
+  Every villager has a daily routine, a mood, a friendship level with Claude and a memory.
+  Their memory holds what happened, lasting facts, and a diary written at the end of each in-game day.
+- **Talk back**: when a villager greets Claude you can pick a reply (warm, *tell me more*, an apology, a gift…).
+  Your choice changes their mood and friendship.
+- **A living calendar**:
+  - Four seasons of seven days each, with their own colours, fish, bugs and festivals.
+  - Daily events: rain and snow, a travelling merchant, lost items, fishing contests, meteor showers, birthdays.
+  - Villager gossip and a morning *Village Gazette*.
+- **Things to do with your Bells**:
+  - Crops and seeds, cooking at the café, decorations.
+  - Community projects that change the map: benches, a riverside park, street lamps, a fishing pier, a museum.
+  - A walkable museum with a curator owl, plus bug catching, digging for fossils, fish records, letters by mail and villager requests.
+- **It notices your real work**:
+  - While Claude Code runs tools in your session, the village Claude hammers, reads or stokes a forge to match.
+  - Finished turns get a cheer, passing tests a rainbow, failing tests a little rain cloud.
+- **Postcards**: one click copies the current scene plus a caption to the clipboard.
+
+## Requirements
+
+Claude Code with function-hook plugins (mods). The village draws best in the terminal's fullscreen layout. The desktop app shows a plain-text map.
+
+## Install
+
+Clone the repository, then point Claude Code at the folder.
+
+For every session, add it to the `env` block of `~/.claude/settings.json`:
+
+```json
+{
+  "env": { "CLAUDE_CODE_PLUGIN_DIRS": "Z:\\Repository\\cozy-village" }
+}
+```
+
+For a single session:
+
+```
+claude --plugin-dir Z:\Repository\cozy-village
+```
+
+Then type `/village` to open the pane.
+
+## Playing
+
+| Where | What |
+|---|---|
+| Input field under the map | Type a wish; Claude plans it and carries it out |
+| Tabs: **Chat · Memories · Village** | The chat log, what everyone remembers, and projects / museum / requests |
+| **Quick** bar | One-click chores: fish, chop wood, water, harvest, sell, read mail (no model call) |
+| Reply row | Shows up when a villager talks to Claude; click a reply within about ten seconds |
+| **Postcard** | Copies the scene to the clipboard |
+| **Museum tour** | Walk through the museum once it is built |
+| `/village memory` | Prints every character's memory |
+| `/village forget` | Wipes all memories and friendships |
+
+Buttons are clicked with the mouse; there are no keyboard shortcuts.
+
+## Settings
+
+Open `/config` and look for **cozy-village**:
+
+| Setting | Default | What it does |
+|---|---|---|
+| Open the village at session start | off | Opens the pane by itself; otherwise use `/village` |
+| Village ticker in the status line | off | Season, Bells, events and requests under the prompt |
+| Model for the villagers | `haiku` | `haiku`, `sonnet` or `opus` |
+| Velvet Club (adults only) | off | Adds an adults-only club as a community project. Content stays non-explicit, and Pip (a child) is always kept out of it |
+
+## Model usage
+
+The village calls the chosen model:
+
+- once per wish (the planning prompt is about 3–5k tokens)
+- once per in-game day for diaries, gossip, letters and the Gazette (a game day is about seven real minutes)
+- once per *tell me more* reply
+
+Nothing else talks to a model.
+
+## Your save
+
+The village is saved through Claude Code's plugin store. Saving happens every in-game hour, and the save carries over between sessions.
+
+## Development
+
+```
+hooks/
+  register.tsx   pane UI, slash command, session hooks, model calls
+  game.ts        simulation: map, villagers, memory, events, economy, seasons, drawing
+  catalog.ts     data tables: crops, shop, recipes, projects, bugs, fish, museum
+  museum.ts      the museum interior and the curator's lines
+types/index.d.ts the plugin's state contract
+tests/           claude plugin test suite
+```
+
+```
+claude plugin validate .
+claude plugin test .
+```
+
+`.claude-plugin/types/` is generated by Claude Code when the plugin loads and is not committed.

@@ -1,0 +1,40 @@
+{
+  "name": "cozy-village",
+  "version": "0.2.0",
+  "description": "A cozy Stardew/Animal-Crossing-style village pane where Claude lives, farms, fishes and chats in speech bubbles - prompt it from the pane's input field.",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "Nico Reber"
+  },
+  "userConfig": {
+    "autoOpen": {
+      "type": "boolean",
+      "title": "Open the village at session start",
+      "description": "Open the village pane by itself when a session starts (otherwise use /village).",
+      "default": false
+    },
+    "ticker": {
+      "type": "boolean",
+      "title": "Village ticker in the status line",
+      "description": "Show the season, Bells, events and requests in the status line.",
+      "default": false
+    },
+    "model": {
+      "type": "string",
+      "title": "Model for the villagers",
+      "description": "The model that plans wishes, writes diaries and voices villagers.",
+      "default": "haiku",
+      "options": [
+        "haiku",
+        "sonnet",
+        "opus"
+      ]
+    },
+    "nightclub": {
+      "type": "boolean",
+      "title": "Velvet Club (adults only)",
+      "description": "Offer the adults-only Velvet Club as a community project.",
+      "default": false
+    }
+  }
+}
