@@ -2580,7 +2580,8 @@ export function frame(w: World, cols: number): Uint32Array {
     for (let k = 0; k < 3; k++) {
       const bx = Math.floor((t / 240) * (cols + 10)) - 5 - k * 2
       const by = 2 + (k % 2) + (Math.floor(t / 20) % 2)
-      if (bx >= 0 && bx < cols) put(bx, by, ch('v'), 0x37474f, bgAt(bx, by))
+      const under = tileAt(w, bx + camX, by - 1 + camY)
+      if (bx >= 0 && bx < cols && under !== 'wall' && under !== 'roof') put(bx, by, ch('v'), 0x37474f, bgAt(bx, by))
     }
   }
   if (w.adults && w.projects.club.done && isNight && !inMuseum) {
@@ -2622,45 +2623,6 @@ export function frame(w: World, cols: number): Uint32Array {
     sprite(w.inside, '☺', 0xffeb3b)
   }
 
-  const bubble = (m: Pt, b: Bubble | undefined, border: number, name?: string) => {
-    if (!b || !visible(m)) return
-    const width = Math.max(8, Math.min(28, cols - 4))
-    const lines = wrap(b.text, width, 3)
-    const inner = Math.max(...lines.map(s => s.length), name ? name.length + 2 : 0)
-    const bw = inner + 4
-    const bh = lines.length + 2
-    const { sx, sy } = screen(m)
-    const isAbove = sy - 1 - bh >= 1
-    const top = isAbove ? sy - 1 - bh : sy + 2
-    const left = Math.max(0, Math.min(cols - bw, sx - Math.floor(bw / 2)))
-    const paper = 0xfffdf5
-    const ink = 0x3a2e2a
-    for (let r = 0; r < bh; r++) {
-      for (let c = 0; c < bw; c++) {
-        const edgeY = r === 0 || r === bh - 1
-        const edgeX = c === 0 || c === bw - 1
-        let g = ' '
-        if (edgeY && edgeX) g = r === 0 ? (c === 0 ? '╭' : '╮') : c === 0 ? '╰' : '╯'
-        else if (edgeY) g = '─'
-        else if (edgeX) g = '│'
-        put(left + c, top + r, ch(g), border, paper)
-      }
-    }
-    if (name) text(left + 2, top, ` ${name} `, border, paper)
-    lines.forEach((s, r) => text(left + 2, top + 1 + r, s, ink, paper))
-    const tailX = Math.max(left + 1, Math.min(left + bw - 2, sx))
-    if (isAbove) {
-      put(tailX, top + bh - 1, ch('┬'), border, paper)
-      if (top + bh < sy) put(tailX, top + bh, ch('▼'), paper, bgAt(tailX, top + bh))
-    } else {
-      put(tailX, top, ch('┴'), border, paper)
-      if (top - 1 > sy) put(tailX, top - 1, ch('▲'), paper, bgAt(tailX, top - 1))
-    }
-  }
-  bubble(w.mochi, w.mochi.bubble, 0xb0a0a0)
-  if (w.merchant) bubble(w.merchant, w.merchant.bubble, 0xffb300, 'Kiki')
-  for (const v of VILLAGERS) bubble(w.npcs[v.id], w.npcs[v.id].bubble, v.color, w.npcs[v.id].bubble?.text === 'zZ' ? undefined : v.name)
-  const thinkingBubble = w.thinking ? { text: ['.  ', '.. ', '...'][Math.floor(w.tick / 3) % 3] + ' hmm', ticks: 1 } : undefined
   if (!inMuseum && (w.cheer > 0 || w.cloud > 0) && visible(w.player)) {
     const { sx, sy } = screen(w.player)
     if (w.cheer > 0) {
@@ -2675,8 +2637,84 @@ export function frame(w: World, cols: number): Uint32Array {
       if (w.tick % 4 < 2) put(sx + (w.tick % 3) - 1, sy - 1, ch("'"), 0x81d4fa, bgAt(sx, sy - 1))
     }
   }
-  if (inMuseum) bubble(w.curator, w.curator.bubble, 0xbcaaa4, 'Hoot')
-  bubble(me, thinkingBubble ?? w.player.bubble, 0xc9a227, 'Claude')
+  // ---- speech bubbles: laid out together so none covers another bubble or a speaker ----
+  type Ask = { at: Pt; b: Bubble; border: number; name?: string; rank: number }
+  type Box = { x0: number; y0: number; x1: number; y1: number }
+  const asks: Ask[] = []
+  const ask = (m: Pt, b: Bubble | undefined, border: number, name: string | undefined, rank: number) => {
+    if (b && visible(m)) asks.push({ at: m, b, border, name, rank })
+  }
+  const thinkingBubble = w.thinking ? { text: ['.  ', '.. ', '...'][Math.floor(w.tick / 3) % 3] + ' hmm', ticks: 1 } : undefined
+  ask(me, thinkingBubble ?? w.player.bubble, 0xc9a227, 'Claude', 0)
+  if (inMuseum) ask(w.curator, w.curator.bubble, 0xbcaaa4, 'Hoot', 1)
+  for (const v of VILLAGERS) ask(w.npcs[v.id], w.npcs[v.id].bubble, v.color, w.npcs[v.id].bubble?.text === 'zZ' ? undefined : v.name, 1)
+  if (w.merchant) ask(w.merchant, w.merchant.bubble, 0xffb300, 'Kiki', 1)
+  ask(w.mochi, w.mochi.bubble, 0xb0a0a0, undefined, 2)
+  // Claude first, then the freshest lines (most ticks left), Mochi's purrs last
+  asks.sort((a, b) => a.rank - b.rank || b.b.ticks - a.b.ticks)
+
+  const speakers = asks.map(a => screen(a.at))
+  const placed: Box[] = []
+  const overlaps = (r: Box) =>
+    placed.some(q => r.x0 <= q.x1 && q.x0 <= r.x1 && r.y0 <= q.y1 && q.y0 <= r.y1)
+    || speakers.some(q => q.sx >= r.x0 && q.sx <= r.x1 && q.sy >= r.y0 && q.sy <= r.y1)
+  const paper = 0xfffdf5
+  const ink = 0x3a2e2a
+
+  for (const a of asks) {
+    const { sx, sy } = screen(a.at)
+    const width = Math.max(8, Math.min(28, cols - 4))
+    const lines = wrap(a.b.text, width, 3)
+    const bw = Math.max(...lines.map(l => l.length), a.name ? a.name.length + 2 : 0) + 4
+    const bh = lines.length + 2
+    let spot: { left: number; top: number; below: boolean; gap: number } | undefined
+    search: for (const below of [false, true]) {
+      for (let gap = 0; gap <= 4; gap++) {
+        for (const shift of [0, -1, 1, -2, 2]) {
+          const left = Math.max(0, Math.min(cols - bw, sx - Math.floor(bw / 2) + shift * Math.floor(bw / 3)))
+          if (sx < left + 1 || sx > left + bw - 2) continue
+          const top = below ? sy + 2 + gap : sy - 1 - gap - bh
+          if (top < 1 || top + bh - 1 > VIEW_H) continue
+          const box = { x0: left, y0: top, x1: left + bw - 1, y1: top + bh - 1 }
+          const tail = below ? { x0: sx, y0: sy + 1, x1: sx, y1: top - 1 } : { x0: sx, y0: top + bh, x1: sx, y1: sy - 1 }
+          if (overlaps(box) || overlaps(tail)) continue
+          placed.push(box, tail)
+          spot = { left, top, below, gap }
+          break search
+        }
+      }
+    }
+    if (!spot) {
+      // no room anywhere: a small mark shows someone is talking; the line itself is in the chat log
+      const mark = { x0: sx, y0: sy - 1, x1: sx, y1: sy - 1 }
+      if (sy - 1 >= 1 && !overlaps(mark)) {
+        placed.push(mark)
+        put(sx, sy - 1, ch('…'), a.border, bgAt(sx, sy - 1))
+      }
+      continue
+    }
+    const { left, top, below } = spot
+    for (let r = 0; r < bh; r++) {
+      for (let c = 0; c < bw; c++) {
+        const edgeY = r === 0 || r === bh - 1
+        const edgeX = c === 0 || c === bw - 1
+        let g = ' '
+        if (edgeY && edgeX) g = r === 0 ? (c === 0 ? '╭' : '╮') : c === 0 ? '╰' : '╯'
+        else if (edgeY) g = '─'
+        else if (edgeX) g = '│'
+        put(left + c, top + r, ch(g), a.border, paper)
+      }
+    }
+    if (a.name) text(left + 2, top, ` ${a.name} `, a.border, paper)
+    lines.forEach((l, r) => text(left + 2, top + 1 + r, l, ink, paper))
+    if (below) {
+      put(sx, top, ch('┴'), a.border, paper)
+      for (let y = sy + 1; y < top; y++) put(sx, y, ch(y === sy + 1 ? '▲' : '│'), y === sy + 1 ? paper : a.border, bgAt(sx, y))
+    } else {
+      put(sx, top + bh - 1, ch('┬'), a.border, paper)
+      for (let y = top + bh; y < sy; y++) put(sx, y, ch(y === sy - 1 ? '▼' : '│'), y === sy - 1 ? paper : a.border, bgAt(sx, y))
+    }
+  }
 
   if (w.rainbow > 0 && !inMuseum) {
     const colors = [0xef5350, 0xffa726, 0xffee58, 0x66bb6a, 0x42a5f5, 0xab47bc]

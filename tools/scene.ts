@@ -7,6 +7,8 @@ import { applyProject, createWorld, encode, enqueue, frame, step } from '../hook
 import type { Action, VillagerId, World } from '../hooks/game'
 
 const COLS = 80
+/** The test runner provides a console; the plugin types do not declare one. */
+declare const console: { log: (...args: unknown[]) => void }
 
 test('record the README scenes', async () => {
   const w = createWorld()
