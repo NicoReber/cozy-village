@@ -823,6 +823,53 @@ function frame(now) {
   // name tags and speech bubbles, in screen pixels so text stays crisp
   const toScreen = (x, y) => [x * z + ox, y * z + oy]
   const tagScale = Math.max(0.8, Math.min(1.4, z / (3 * dpr))) * dpr
+
+  // the bomb factory: a ruin with rising smoke after a blast, and the blast itself
+  if (state.factory && !museum) {
+    const [fx, fy] = toScreen(65 * T, 11 * T)
+    const fw = 7 * T * z, fh = 4 * T * z
+    if (state.factory.rubble) {
+      ctx.fillStyle = '#3e2723'; ctx.fillRect(fx, fy + fh * 0.35, fw, fh * 0.65)
+      for (let k = 0; k < 40; k++) {
+        ctx.fillStyle = ['#6d4c41', '#9e9e9e', '#424242', '#8d6e63'][k % 4]
+        const s = (3 + noise(k, 1, 2) * 5) * z
+        ctx.fillRect(fx + noise(k, 3, 4) * (fw - s), fy + fh * (0.3 + noise(k, 5, 6) * 0.6), s, s * 0.7)
+      }
+      for (let k = 0; k < 6; k++) {
+        const t = (now / 3000 + k / 6) % 1
+        ctx.fillStyle = `rgba(140,140,140,${0.55 * (1 - t)})`
+        ctx.beginPath()
+        ctx.arc(fx + fw * (0.2 + noise(k, 7, 8) * 0.6) + Math.sin(now / 700 + k) * 4 * z, fy + fh * 0.4 - t * 40 * z, (4 + t * 10) * z, 0, Math.PI * 2)
+        ctx.fill()
+      }
+    }
+    if (state.factory.boom > 0) {
+      const phase = Math.max(0, 30 - state.factory.boom)
+      const [cx, cy] = toScreen(68 * T + 8, 12 * T + 8)
+      const r = (1 + phase / 2) * T * z
+      const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, r)
+      const a = Math.max(0, 1 - phase / 30)
+      glow.addColorStop(0, `rgba(255,253,231,${a})`)
+      glow.addColorStop(0.35, `rgba(255,183,77,${a * 0.9})`)
+      glow.addColorStop(0.7, `rgba(229,57,53,${a * 0.6})`)
+      glow.addColorStop(1, 'rgba(66,66,66,0)')
+      ctx.fillStyle = glow
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill()
+      for (let k = 0; k < 24; k++) {
+        const ang = k / 24 * Math.PI * 2 + noise(k, 9, 1)
+        const d = r * (0.8 + noise(k, 2, 3) * 0.4)
+        ctx.fillStyle = ['#fff176', '#ffb74d', '#ff7043', '#757575'][k % 4]
+        ctx.fillRect(cx + Math.cos(ang) * d, cy + Math.sin(ang) * d * 0.6, 3 * z, 3 * z)
+      }
+      if (phase < 22) {
+        ctx.font = `bold ${Math.round(14 * z)}px system-ui`
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+        ctx.lineWidth = 3 * dpr; ctx.strokeStyle = '#000000'
+        ctx.fillStyle = Math.floor(now / 120) % 2 ? '#ffeb3b' : '#ff5252'
+        ctx.strokeText('KABOOM!', cx, cy - T * z); ctx.fillText('KABOOM!', cx, cy - T * z)
+      }
+    }
+  }
   if (z >= 1.5 * dpr) {
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'

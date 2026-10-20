@@ -106,6 +106,7 @@ export function statePayload(w: World, log: readonly LogLine[]) {
     fireworks: !!active(w, 'season') && season(w) === 'summer',
     meteor: !!active(w, 'meteor'),
     club: w.adults && w.projects.club.done,
+    factory: w.projects.factory.done ? { boom: w.boom, rubble: w.rubble > 0 } : null,
     inv: Object.entries(w.inv).filter(([, n]) => n > 0),
     movers,
     critters: museum ? [] : w.critters.map(c => ({ x: c.x, y: c.y, kind: c.kind, color: hex(c.color), flies: !!BUGS[c.kind]?.flies })),
