@@ -14,7 +14,12 @@ const at = (x: number, y: number) => y * IW + x
 const fill = (x0: number, y0: number, x1: number, y1: number, t: ITile) => {
   for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) grid[at(x, y)] = t
 }
-const title = (x: number, y: number, text: string) => { for (let i = 0; i < text.length; i++) titles[at(x + i, y)] = text[i] }
+/** The hall names over the doors, for renderers that draw them as words. */
+export const HALL_TITLES: { x: number; y: number; text: string }[] = []
+const title = (x: number, y: number, text: string) => {
+  for (let i = 0; i < text.length; i++) titles[at(x + i, y)] = text[i]
+  HALL_TITLES.push({ x, y, text: text.trim() })
+}
 
 // outer walls, the cross walls between the halls and their openings
 fill(0, 0, IW - 1, 0, 'wall'); fill(0, IH - 1, IW - 1, IH - 1, 'wall'); fill(0, 0, 0, IH - 1, 'wall'); fill(IW - 1, 0, IW - 1, IH - 1, 'wall')
@@ -85,6 +90,18 @@ const LOOKS: Record<string, [string, number]> = {
   ammonite: ['@', 0xd7ccc8], trilobite: ['¥', 0xbcaaa4], amber: ['o', 0xffb300], 'dino tooth': ['V', 0xfff8e1], 'fern fossil': ['ψ', 0xa1887f],
   'star fragment': ['*', 0xfff176], 'old boot': ['b', 0x8d6e63], 'old coin': ['o', 0xffd54f], amethyst: ['♦', 0xba68c8], ruby: ['♦', 0xe53935],
 }
+/** One interior tile, `void` outside the walls. */
+export const interiorTile = (x: number, y: number): ITile | 'void' => (x < 0 || y < 0 || x >= IW || y >= IH ? 'void' : grid[at(x, y)])
+
+/** What a case at x, y shows: its piece, section and colour. */
+export function caseAt(x: number, y: number): { piece: string; section: string; color: number } | null {
+  const piece = Object.keys(CASES).find(k => CASES[k].x === x && CASES[k].y === y)
+  if (!piece) return null
+  const section = SECTION_OF[piece]
+  const color = section === 'fish' ? FISH_COLORS[piece] ?? 0xffffff : section === 'bugs' ? BUGS[piece].colors[0] : (LOOKS[piece] ?? ['?', 0xffffff])[1]
+  return { piece, section, color }
+}
+
 const CASE_BG: Record<string, number> = { fish: 0x1e6fa8, bugs: 0x33691e, fossils: 0x616161, oddities: 0x4a148c }
 
 /** One interior cell: [code point, foreground, background]; outside the walls is dark. */

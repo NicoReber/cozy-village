@@ -3,6 +3,7 @@ import { expect, test } from 'claude-code/testing'
 import {
   answerMore, applyDiary, applyProject, chooseReply, createWorld, diaryPrompt, echoTests, echoTool, echoTurn, enqueue, frame, parseActions, offerReplies, remember, postcard, restore, ROWS, snapshot, step, summary, systemPrompt, ticker, VILLAGERS,
 } from '../hooks/game'
+import { CHORES, mapPayload, statePayload } from '../hooks/web'
 
 const PANE = {
   plugin: 'cozy-village',
@@ -437,4 +438,36 @@ test('a speech bubble stays where it first appeared, even when space frees up', 
   expect(find('Claude')).toEqual(first)
   w.player.bubble = { text: 'A new line may pick a new spot.', ticks: 500 }
   expect(find('Claude')).not.toBe(null)
+})
+
+test('the desktop pane points to the browser view and keeps the chat and the wish field', async $ => {
+  for (const surface of ['desktop', 'mobile'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    expect(await ui.find({ text: /lives in your browser/ })).toBeDefined()
+    expect(await ui.find({ key: 'panel-chat' })).toBeDefined()
+    await ui.unmount()
+  }
+})
+
+test('the browser view gets the whole map and everyone who moves', async () => {
+  const w = createWorld()
+  const map = mapPayload(w)
+  expect(map.scene).toBe('village')
+  expect(map.rows.length).toBe(24)
+  expect(map.rows.every(r => r.length === 96)).toBe(true)
+  expect(map.rows[2]).toContain('r')
+  const state = statePayload(w, [{ who: 'rosa', text: 'Hello!' }])
+  expect(state.movers.map(m => m.k)).toContain('me')
+  expect(state.movers.length).toBe(VILLAGERS.length + 2)
+  expect(state.log[0]).toEqual({ who: 'Rosa', color: '#f48fb1', text: 'Hello!', event: false })
+  expect(JSON.stringify({ state, map }).length).toBeLessThan(200000)
+  w.scene = 'museum'
+  w.museum = ['koi']
+  const room = mapPayload(w) as { scene: string; cases: { shown: boolean }[] }
+  expect(room.scene).toBe('museum')
+  expect(room.cases.filter(c => c.shown).length).toBe(1)
+})
+
+test('chores from the browser are the same plans as the Quick bar', async () => {
+  for (const c of Object.values(CHORES)) expect(parseActions(JSON.stringify(c.plan)).length).toBe(c.plan.length)
 })

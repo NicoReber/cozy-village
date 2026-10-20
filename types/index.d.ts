@@ -5,6 +5,6 @@ export type Tab = 'chat' | 'memories' | 'village'
 
 declare module 'claude-code' {
   interface PluginState {
-    'cozy-village': { log: LogLine[]; thinking: boolean; tab: Tab; reply: string }
+    'cozy-village': { log: LogLine[]; thinking: boolean; tab: Tab; reply: string; web: string }
   }
 }

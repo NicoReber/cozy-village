@@ -1819,7 +1819,7 @@ export function eventsText(w: World): string {
 }
 
 /** Short labels of what is happening now, for the HUD. */
-function eventLabels(w: World): string {
+export function eventLabels(w: World): string {
   const LABEL: Record<EventKind, string> = {
     rain: 'rain', merchant: 'merchant', festival: 'festival!', lost: 'lost item', tournament: 'fishing contest',
     meteor: 'meteor shower', birthday: 'birthday', season: 'festival!',

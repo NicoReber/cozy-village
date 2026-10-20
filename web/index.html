@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cozy Village</title>
+<style>
+  :root {
+    --bg: #14171c; --panel: #1d2128; --panel-2: #262b34; --line: #333a45; --text: #e8e6e3; --dim: #9aa3ad;
+    --accent: #d97757; --gold: #e6c34a; --good: #7bc67b;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.4 'Segoe UI', system-ui, sans-serif; overflow: hidden; }
+  #world { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; image-rendering: pixelated; }
+  #world.dragging { cursor: grabbing; }
+  .bar { position: fixed; top: 0; left: 0; right: 0; height: 52px; display: flex; align-items: center; gap: 10px; padding: 0 12px;
+    background: color-mix(in srgb, var(--panel) 94%, transparent); border-bottom: 1px solid var(--line); z-index: 2; }
+  .brand { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 17px; letter-spacing: .3px; margin-right: 6px; white-space: nowrap; }
+  .brand i { width: 26px; height: 26px; border-radius: 6px; background: var(--accent); display: grid; place-items: center; font-style: normal; font-size: 15px; }
+  .chip { display: flex; flex-direction: column; justify-content: center; padding: 3px 12px; height: 38px; border-radius: 8px; background: var(--panel-2); border: 1px solid var(--line); white-space: nowrap; }
+  .chip b { font-size: 14px; } .chip small { color: var(--dim); font-size: 11px; }
+  .chip.event b { color: var(--gold); }
+  .spacer { flex: 1; }
+  .tools { display: flex; gap: 4px; }
+  button { font: inherit; color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-radius: 7px; padding: 6px 10px; cursor: pointer; }
+  button:hover { border-color: var(--dim); }
+  button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .panel { position: fixed; z-index: 2; background: color-mix(in srgb, var(--panel) 95%, transparent); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 30px #0006; }
+  #chat { left: 12px; bottom: 12px; width: min(460px, calc(100vw - 24px)); }
+  #chat header { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; font-weight: 700; letter-spacing: .4px; border-bottom: 1px solid var(--line); }
+  #chat header button { padding: 2px 8px; }
+  #log { max-height: 190px; overflow-y: auto; padding: 6px 12px; display: flex; flex-direction: column; gap: 2px; }
+  #chat.closed #log, #chat.closed form, #chat.closed .chores { display: none; }
+  .line { display: grid; grid-template-columns: 62px 1fr; gap: 6px; }
+  .line .who { font-weight: 700; overflow: hidden; text-overflow: ellipsis; }
+  .line.event { color: var(--dim); font-style: italic; grid-template-columns: 1fr; padding-left: 68px; }
+  .chores { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 12px 0; }
+  .chores button { padding: 3px 8px; font-size: 12px; }
+  form { display: flex; gap: 6px; padding: 8px 12px 10px; }
+  input { flex: 1; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 7px 10px; outline: none; }
+  input:focus { border-color: var(--accent); }
+  form button { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
+  #reply { left: 50%; transform: translateX(-50%); bottom: 18px; padding: 10px 14px; display: none; max-width: min(640px, calc(100vw - 500px)); min-width: 300px; }
+  #reply.show { display: block; }
+  #reply p { margin: 0 0 8px; } #reply .opts { display: flex; flex-wrap: wrap; gap: 6px; }
+  #bag { right: 12px; bottom: 12px; padding: 8px 12px; max-width: 360px; color: var(--dim); }
+  #bag b { color: var(--text); }
+  #offline { position: fixed; inset: 0; display: grid; place-items: center; z-index: 3; background: #14171ccc; font-size: 15px; }
+  #offline.hide { display: none; }
+  @media (max-width: 900px) { .chip.hide-small { display: none; } #reply { max-width: calc(100vw - 24px); bottom: 300px; } #bag { display: none; } }
+</style>
+</head>
+<body>
+<canvas id="world"></canvas>
+<div class="bar">
+  <div class="brand"><i>🏡</i>Cozy Village</div>
+  <div class="chip"><b id="when">–</b><small id="season">–</small></div>
+  <div class="chip"><b id="bells">–</b><small>Bells</small></div>
+  <div class="chip hide-small"><b id="doing">–</b><small>Claude</small></div>
+  <div class="chip event hide-small" id="eventChip" hidden><b id="events"></b><small>today</small></div>
+  <div class="spacer"></div>
+  <div class="tools">
+    <button id="museum" hidden title="Walk through the museum">Museum tour</button>
+    <button id="follow" class="on" title="Keep the camera on Claude (double-click the map)">Follow</button>
+    <button id="fit" title="Show the whole village">Whole village</button>
+    <button id="zoomOut" title="Zoom out">−</button>
+    <button id="zoomIn" title="Zoom in">+</button>
+  </div>
+</div>
+<section id="chat" class="panel">
+  <header>CHAT <button id="toggleChat" title="Fold the chat">▾</button></header>
+  <div id="log"></div>
+  <div class="chores" id="chores"></div>
+  <form id="wish"><input id="wishText" autocomplete="off" placeholder='Tell Claude what to do, e.g. "buy pumpkin seeds and plant them"'><button>Send</button></form>
+</section>
+<section id="reply" class="panel"><p id="replyLine"></p><div class="opts" id="replyOpts"></div></section>
+<section id="bag" class="panel">🎒 <b id="bagText">empty</b></section>
+<div id="offline">Waiting for the village… (is the Claude Code session still open?)</div>
+<script type="module" src="village.js"></script>
+</body>
+</html>

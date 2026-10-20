@@ -5,9 +5,10 @@ import type { LogLine, Tab } from '../types'
 import { MUSEUM, PROJECTS } from './catalog'
 import type { ProjectId } from './catalog'
 import {
-  answerMore, applyDiary, chooseReply, createWorld, DIARY_SYSTEM, diaryPrompt, echoTests, echoTool, echoTurn, encode, enqueue, frame, frameText, heardWish, MAX_VIEW,
+  answerMore, applyDiary, chooseReply, createWorld, DIARY_SYSTEM, diaryPrompt, echoTests, echoTool, echoTurn, encode, enqueue, frame, heardWish, MAX_VIEW,
   memoryText, MORE_SYSTEM, moreContext, parseActions, postcard, projectIds, restore, ROWS, sayPlayer, snapshot, step, summary, systemPrompt, ticker, VILLAGERS,
 } from './game'
+import { CHORES, mapPayload, statePayload } from './web'
 
 const PANE = 'cozy-village'
 /** The model behind the villagers; the `model` setting replaces it when the module loads. */
@@ -18,6 +19,8 @@ const thinking = atom({ plugin: 'cozy-village', key: 'thinking' } as const, fals
 const tab = atom({ plugin: 'cozy-village', key: 'tab' } as const, 'chat' as Tab)
 /** Which reply offer is showing, `who@until`, or empty: drawing reads it so the row appears and goes away. */
 const replyKey = atom({ plugin: 'cozy-village', key: 'reply' } as const, '')
+/** The browser view's address once its server listens, empty before; the pane shows it. */
+const webLink = atom({ plugin: 'cozy-village', key: 'web' } as const, '')
 
 const ACCENT = '#e6c34a'
 const INK = '#3a2e2a'
@@ -45,6 +48,8 @@ let surface = 'terminal'
 let savedHour = -1
 let isReflecting = false
 let lastTicker = ''
+/** The browser view's server: started once, then fed the world every tick (see web/server.mjs). */
+const web = { started: false, port: 0, token: '', posting: false, mapSent: '', mapAt: -1, chat: [] as LogLine[] }
 let isAnswering = false
 const TESTS = /\b(test|tests|vitest|jest|pytest|dotnet\s+test|cargo\s+test|npm\s+run\s+build|dotnet\s+build|tsc)\b/i
 
@@ -95,6 +100,72 @@ async function tellMore($: EngineInterface) {
   isAnswering = false
 }
 
+/** Starts the browser view's server once; it lives as long as this module, which kills it on unload. */
+function startWeb($: EngineInterface) {
+  if (web.started) return
+  web.started = true
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  web.token = [...bytes].map(b => b.toString(16).padStart(2, '0')).join('')
+  void (async () => {
+    try {
+      const server = $.process.spawn({ argv: ['node', `${$.plugin.root}/web/server.mjs`], env: { VILLAGE_TOKEN: web.token } })
+      for await (const { stream, text } of server) {
+        const port = /LISTENING (\d+)/.exec(text)
+        if (stream === 'stdout' && port) {
+          web.port = Number(port[1])
+          web.mapSent = ''
+          await update($, webLink, () => `http://localhost:${web.port}/?k=${web.token}`)
+        }
+      }
+    } catch (err) {
+      $.ui.log(`cozy-village: the browser view could not start (${String(err)}); is Node.js installed?`, { to: 'debug' })
+    }
+    web.port = 0
+    web.started = false
+    await update($, webLink, () => '')
+  })()
+}
+
+/** Posts the world to the browser view and acts on what its viewers asked for since the last post. */
+async function feedWeb($: EngineInterface) {
+  web.posting = true
+  try {
+    let map: string | undefined
+    if (world.tick - web.mapAt >= 10 || !web.mapSent) {
+      web.mapAt = world.tick
+      const next = JSON.stringify(mapPayload(world))
+      if (next !== web.mapSent) { map = next; web.mapSent = next }
+    }
+    const body = `{"state":${JSON.stringify(statePayload(world, web.chat))}${map ? `,"map":${map}` : ''}}`
+    const res = await $.http.fetch(`http://127.0.0.1:${web.port}/api/state`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-village-token': web.token }, body })
+    if (!res.ok) { web.mapSent = ''; return }
+    const { inbox } = JSON.parse(res.text) as { inbox?: { kind?: unknown; text?: unknown; key?: unknown; index?: unknown }[] }
+    for (const a of inbox ?? []) {
+      if (a.kind === 'wish' && typeof a.text === 'string') void ask($, a.text.slice(0, 500))
+      else if (a.kind === 'chore' && typeof a.key === 'string' && CHORES[a.key]) enqueue(world, CHORES[a.key].plan as Parameters<typeof enqueue>[1])
+      else if (a.kind === 'reply' && typeof a.index === 'number') chooseReply(world, a.index)
+      else if (a.kind === 'museum' && world.projects.museum.done) enqueue(world, [{ do: world.scene === 'museum' ? 'exit' : 'tour' }])
+    }
+  } catch {
+    web.mapSent = ''
+  } finally {
+    web.posting = false
+  }
+}
+
+/** Opens a link in the person's browser, the way their system does it. */
+async function openInBrowser($: EngineInterface, url: string): Promise<boolean> {
+  const windows = (await $.env.get('OS')) === 'Windows_NT'
+  const tries = windows ? [['rundll32', 'url.dll,FileProtocolHandler', url]] : [['open', url], ['xdg-open', url]]
+  for (const argv of tries) {
+    try {
+      const done = await $.process.run(argv, { timeoutMs: 10000 })
+      if (done.exitCode === 0) return true
+    } catch { /* try the next opener */ }
+  }
+  return false
+}
+
 function memoryReport(): string {
   const blocks = [`Claude\n${memoryText(world, 'claude', 10)}`]
   for (const v of VILLAGERS) blocks.push(`${v.name} (friendship ${world.friendship[v.id] ?? 0})\n${memoryText(world, v.id, 5)}`)
@@ -110,22 +181,24 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'village',
-      description: 'Open the cozy village; "/village memory" shows what everyone remembers, "/village forget" wipes it',
-      argumentHint: '[memory|forget]',
+      description: 'Open the cozy village; "/village web" opens it in your browser, "/village memory" shows what everyone remembers, "/village forget" wipes it',
+      argumentHint: '[web|memory|forget]',
     })
     restore(world, await $.store.get(STORE_KEY))
 
     $.clock.every(150, async () => {
       step(world)
       const lines = world.log.splice(0)
-      if (lines.length) await update($, log, list => [...list, ...lines].slice(-60))
+      if (lines.length) {
+        web.chat = [...web.chat, ...lines].slice(-60)
+        await update($, log, list => [...list, ...lines].slice(-60))
+      }
+      if (web.port && !web.posting) void feedWeb($)
       for (const headline of world.announce.splice(0)) $.ui.toast(`★ ${headline}`)
       if (world.diaryDue.length && !isReflecting) void reflect($)
 
       if (surface === 'terminal') {
         void $.ui.blit({ requestId: PANE, key: 'world', columns: viewCols, rows: ROWS, cells: encode(frame(world, viewCols)) })
-      } else if (world.tick % 4 === 0) {
-        $.ui.invalidate('ui.render')
       }
 
       if (showTicker && world.tick % 20 === 0) {
@@ -169,6 +242,14 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'village' }, async ($, e) => {
     const arg = e.args.trim().toLowerCase()
     if (arg === 'memory') return { text: memoryReport() }
+    if (arg === 'web') {
+      startWeb($)
+      for (let i = 0; i < 40 && !web.port; i++) await $.clock.sleep(100)
+      const url = await read($, webLink)
+      if (!url) return { text: 'The browser view did not start. It needs Node.js on this computer.' }
+      const opened = await openInBrowser($, url)
+      return { text: opened ? `The village is open in your browser: ${url}` : `Open this link in your browser: ${url}` }
+    }
     if (arg === 'forget') {
       const fresh = createWorld()
       world.memory = fresh.memory
@@ -190,7 +271,6 @@ export const register: Register = (on, options) => {
     // map, tab bar, the panel's frame and the framed input take the rest of the rows
     const room = Math.max(3, Math.min(10, e.props.scroll.bodyRows - ROWS - 7))
     const width = viewCols
-    const cells = frame(world, viewCols)
     const { Box, Text, Button } = $.ui.resolve(e)
 
     const header = (title: string, extra?: string) => (
@@ -351,7 +431,7 @@ export const register: Register = (on, options) => {
       const { Raster, Input } = $.ui.resolve(e)
       return (
         <Box flexDirection="column">
-          <Raster key="world" columns={viewCols} rows={ROWS} cells={encode(cells)} />
+          <Raster key="world" columns={viewCols} rows={ROWS} cells={encode(frame(world, viewCols))} />
           {tabs}
           {panel}
           {replies ?? quick}
@@ -361,14 +441,36 @@ export const register: Register = (on, options) => {
         </Box>
       )
     }
-    const map = frameText(cells, viewCols).map(row => <Text>{row}</Text>)
-    if (e.surface === 'mobile') return <Box flexDirection="column">{map}{tabs}{panel}</Box>
+    // desktop and mobile: the village itself runs in the browser, where it can animate without reloading
+    startWeb($)
+    const url = await read($, webLink)
+    const { Link } = $.ui.resolve(e)
+    const browser = (
+      <Box flexDirection="column" borderStyle="round" borderColor={ACCENT} paddingX={1} width={width}>
+        <Text bold color={ACCENT}>🏡 The village lives in your browser</Text>
+        <Text dimColor>{url ? 'Pixel art, walking villagers, day and night. Open the link in the Browser pane (Ctrl+Shift+B) or your own browser; this pane keeps the chat and your wishes.' : 'Starting the browser view… (it needs Node.js)'}</Text>
+        {url ? <Link href={url} label={url} /> : null}
+        {url ? (
+          <Box flexDirection="row" columnGap={2}>
+            <Button key="open-browser" label="Open in my browser" onPress={async () => {
+              if (!(await openInBrowser($, url))) $.ui.toast('Could not open a browser here; copy the link instead.')
+            }} />
+            <Button key="copy-link" plain dimColor label="Copy link" onPress={async press => {
+              const copied = await $.ui.copy({ text: url, surface: press.surface })
+              $.ui.toast(copied.isCopied ? 'Link copied!' : url)
+            }} />
+          </Box>
+        ) : null}
+      </Box>
+    )
+    if (e.surface === 'mobile') return <Box flexDirection="column">{browser}{tabs}{panel}{replies ?? quick}</Box>
     const { Input } = $.ui.resolve(e)
     return (
       <Box flexDirection="column">
-        {map}
+        {browser}
         {tabs}
         {panel}
+        {replies ?? quick}
         <Box borderStyle="round" borderColor={ACCENT} paddingX={1}>
           <Input key="wish" label="✎ " placeholder={placeholder} submitLabel="send" onSubmit={submit} />
         </Box>
