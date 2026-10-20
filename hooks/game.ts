@@ -168,6 +168,10 @@ export type World = {
   adults: boolean
   cheer: number
   cloud: number
+  /** Ticks left of the bomb factory's blast animation. */
+  boom: number
+  /** Ticks until Bruno has patched up the bomb factory after a blast. */
+  rubble: number
   rainbow: number
   flash: number
   events: VillageEvent[]
@@ -208,6 +212,7 @@ const PLACE_SPOTS: Record<string, Pt> = {
   orchard: { x: 23, y: 5 }, flowers: { x: 66, y: 7 }, plaza: { x: 50, y: 11 }, cafe: { x: 40, y: 15 },
   river: { x: 55, y: 13 }, bridge: { x: 61, y: 9 }, workshop: { x: 84, y: 6 }, florist: { x: 67, y: 6 },
   tomhouse: { x: 20, y: 15 }, piphouse: { x: 82, y: 15 }, board: { x: 47, y: 12 }, museum: { x: 27, y: 15 }, club: { x: 88, y: 15 },
+  factory: { x: 68, y: 15 },
 }
 const APPLE_TREES = [[20, 3], [23, 2], [26, 4], [21, 6], [25, 7], [28, 2], [88, 20], [91, 21], [86, 13]]
 const TREES = [
@@ -307,7 +312,7 @@ export function createWorld(): World {
     queue: [], idle: 0, day: 1, minutes: 8 * 60, bells: 100, inv: { turnip: 1 },
     friendship: Object.fromEntries(IDS.map(id => [id, 0])), memory: { claude: [], ...Object.fromEntries(IDS.map(id => [id, []])) },
     diaryDue: [], chatPool: [], later: [], gazette: null, mood: {}, records: {},
-    echo: null, reply: null, askMore: null, replied: {}, adults: false, cheer: 0, cloud: 0, rainbow: 0, flash: 0, events: [], weather: 'clear', pickups: [], announce: [],
+    echo: null, reply: null, askMore: null, replied: {}, adults: false, cheer: 0, cloud: 0, boom: 0, rubble: 0, rainbow: 0, flash: 0, events: [], weather: 'clear', pickups: [], announce: [],
     projects: Object.fromEntries(Object.keys(PROJECTS).map(id => [id, { bells: 0, items: {}, done: false }])) as Record<ProjectId, Project>,
     museum: [], decor: [], requests: [], critters: [], digSpots: [], mail: [], milestones: {},
     scene: 'village', inside: { ...ENTRANCE, path: [] }, curator: { ...CURATOR_SPOT, path: [] },
@@ -579,7 +584,7 @@ Actions:
 {"do":"gift","to":"tom|rosa|bruno|pip|mabel|mochi","item":"<an item from the bag>","count":1}
 {"do":"shop","item":"<shop item>","count":1}   buys at the shop with Bells (seeds, tools, decorations)
 {"do":"cook","recipe":"<recipe>","count":1}   Mabel cooks at the cafe from your ingredients; dishes sell well and everyone loves them as gifts
-{"do":"fund","project":"benches|park|lamps|pier|museum"}   pays Bells and materials toward a community project at the plaza board
+{"do":"fund","project":"benches|park|lamps|pier|museum|factory"}   pays Bells and materials toward a community project at the plaza board (the bomb factory makes fireworks and blows up now and then)
 {"do":"donate"}  donates every new fish, star fragment and boot to the museum (once it is built)
 {"do":"place","item":"<decoration from the bag>","at":"<place>"}   sets a decoration down outside
 {"do":"catch","bug":"<bug kind or any>"}   catches a nearby bug with the bug net (bugs depend on season, time and place)
@@ -1583,7 +1588,8 @@ export function step(w: World) {
   if (w.reply && w.tick > w.reply.until) w.reply = null
   for (const l of w.later.filter(q => q.at <= w.tick)) npcSay(w, l.who, l.text)
   w.later = w.later.filter(q => q.at > w.tick)
-  for (const k of ['cheer', 'cloud', 'rainbow', 'flash'] as const) if (w[k] > 0) w[k] -= 1
+  for (const k of ['cheer', 'cloud', 'boom', 'rainbow', 'flash'] as const) if (w[k] > 0) w[k] -= 1
+  runFactory(w)
   runEcho(w)
   if (w.scene === 'museum') {
     const h = w.curator
@@ -1897,6 +1903,22 @@ export function applyProject(w: World, id: ProjectId) {
       w.places.club = { x: 88, y: 15 }
       break
     }
+    case 'factory': {
+      for (let y = 11; y <= 14; y++) {
+        for (let x = 65; x <= 71; x++) {
+          const i = idx(x, y)
+          w.tiles[i] = y < 13 ? 'roof' : 'wall'
+          w.paint[i] = y < 13 ? [0x5d4037, 0x5d4037] : [0, 0x616161]
+          delete w.deco[i]
+          delete w.fruit[i]
+        }
+      }
+      w.tiles[idx(68, 14)] = 'door'
+      'BOMBS!'.split('').forEach((c, k) => { w.deco[idx(66 + k, 13)] = [c, 0xffd54f] })
+      for (let y = 15; y <= 17; y++) w.tiles[idx(68, y)] = 'path'
+      w.places.factory = { x: 68, y: 15 }
+      break
+    }
     case 'museum': {
       for (let y = 11; y <= 14; y++) {
         for (let x = 24; x <= 30; x++) {
@@ -2076,7 +2098,8 @@ export function villageLines(w: World): LogLine[] {
     const def = PROJECTS[id]
     const st = w.projects[id]
     const items = Object.entries(def.items).map(([k, n]) => `${st.items[k] ?? 0}/${n} ${k}`).join(', ')
-    lines.push({ who: 'project', text: st.done ? `${def.name} - built ✓` : `${def.name} - ${st.bells}/${def.bells} Bells, ${items}` })
+    const built = id === 'factory' && w.rubble > 0 ? 'blown up, Bruno is patching it' : 'built ✓'
+    lines.push({ who: 'project', text: st.done ? `${def.name} - ${built}` : `${def.name} - ${st.bells}/${def.bells} Bells, ${items}` })
   }
   if (!w.projects.museum.done) lines.push({ who: 'museum', text: 'fund the museum project to open it' })
   else {
@@ -2293,6 +2316,54 @@ function nightOut(w: World) {
     w.friendship[id] = (w.friendship[id] ?? 0) + 1
     remember(w, id, 'I ran into Claude at the Velvet Club last night. Fun evening!')
   }
+}
+
+// ---------- the bomb factory ----------
+
+const FACTORY = { x: 68, y: 12 }
+/** About one blast per in-game day (a day is 2880 ticks). */
+const BLAST_CHANCE = 1 / 3000
+const BOOM_TICKS = 30
+const REPAIR_TICKS = hours(6) * 2
+const SHOCKED: Record<VillagerId, string> = {
+  tom: 'That scared every fish out of the pond!',
+  rosa: 'My poor flowers are covered in soot!',
+  bruno: 'Hmph. I only just fixed that roof.',
+  pip: 'WHOA! Do it again!!',
+  mabel: 'Back in my day factories only blew up on Sundays.',
+}
+
+function runFactory(w: World) {
+  if (!w.projects.factory.done) return
+  if (w.rubble > 0) {
+    w.rubble -= 1
+    if (w.rubble === 0) {
+      npcSay(w, 'bruno', 'Bomb factory is patched up. Stand further back next time.')
+      w.log.push({ who: 'event', text: 'Bruno rebuilt the bomb factory.' })
+    }
+    return
+  }
+  if (Math.random() < BLAST_CHANCE) explode(w)
+}
+
+/** The bomb factory blows up: a flash, a fireball, soot on everyone nearby, and Bruno gets to work. */
+export function explode(w: World) {
+  if (!w.projects.factory.done || w.rubble > 0) return
+  w.boom = BOOM_TICKS
+  w.flash = 4
+  w.rubble = REPAIR_TICKS
+  const headline = pick(['KABOOM! The bomb factory blew up again.', 'BOOM! The bomb factory went up in a cloud of confetti and soot.', 'The bomb factory exploded. Nobody is surprised.'])
+  w.announce.push(headline)
+  w.log.push({ who: 'event', text: headline })
+  rememberAll(w, `The bomb factory blew up on day ${w.day} at ${clock(w)}.`)
+  for (const id of IDS) {
+    const npc = w.npcs[id]
+    if (npc.asleep || dist(npc, FACTORY) > 14) continue
+    const m = w.mood[id] ?? 0
+    w.mood[id] = id === 'pip' ? Math.min(2, m + 1) : Math.max(-2, m - 1)
+    npcSay(w, id, SHOCKED[id])
+  }
+  if (w.scene === 'village') sayPlayer(w, dist(w.player, FACTORY) <= 8 ? 'Cough cough... my eyebrows!' : 'Did something just explode?')
 }
 
 // ---------- drawing ----------
@@ -2596,6 +2667,51 @@ export function frame(w: World, cols: number): Uint32Array {
       if (!visible(note)) continue
       const { sx, sy } = screen(note)
       put(sx, sy, ch(k % 2 ? '♫' : '♪'), [0xff4081, 0xb388ff, 0x80d8ff][k], bgAt(sx, sy))
+    }
+  }
+  if (w.projects.factory.done && !inMuseum) {
+    if (w.rubble > 0) {
+      for (let y = 11; y <= 14; y++) {
+        for (let x = 65; x <= 71; x++) {
+          if (!visible({ x, y })) continue
+          const { sx, sy } = screen({ x, y })
+          const n = noise(x, y, 5)
+          put(sx, sy, ch(['▒', '░', '·', '#'][n % 4]), tint(n % 3 ? 0x6d4c41 : 0x9e9e9e, l), tint(0x3e2723, l))
+        }
+      }
+      for (let k = 0; k < 4; k++) {
+        const rise = (w.tick + k * 7) % 28
+        const puff = { x: 66 + ((k * 3 + Math.floor((w.tick + k * 7) / 28)) % 5), y: 10 - Math.floor(rise / 7) }
+        if (!visible(puff)) continue
+        const { sx, sy } = screen(puff)
+        put(sx, sy, ch(rise < 14 ? '▒' : '░'), 0x9e9e9e, bgAt(sx, sy))
+      }
+    } else if (!isRaining && Math.floor(w.tick / 5) % 4 !== 3 && visible({ x: 70, y: 10 })) {
+      const { sx, sy } = screen({ x: 70, y: 10 })
+      put(sx, sy, ch(w.tick % 10 < 5 ? '°' : '·'), 0xbdbdbd, bgAt(sx, sy))
+    }
+    if (w.boom > 0) {
+      const phase = BOOM_TICKS - w.boom
+      const r = Math.min(9, 1 + phase / 2)
+      const fire = [0xfffde7, 0xfff176, 0xffb74d, 0xff7043, 0xe53935, 0x757575]
+      for (let y = Math.floor(FACTORY.y - r); y <= FACTORY.y + r; y++) {
+        for (let x = Math.floor(FACTORY.x - 2 * r); x <= FACTORY.x + 2 * r; x++) {
+          const d = Math.hypot((x - FACTORY.x) / 2, y - FACTORY.y)
+          if (d > r || !visible({ x, y })) continue
+          const ring = d > r - 1.2
+          const core = phase < 12 && d < r * 0.6
+          if (!ring && !core) continue
+          if (ring && noise(x, y, phase) < 350) continue
+          const { sx, sy } = screen({ x, y })
+          const heat = Math.min(5, Math.floor(phase / 6) + (ring ? 1 : 0))
+          put(sx, sy, ch(core ? '▓' : noise(x, y, phase) % 2 ? '*' : '·'), fire[heat], core ? fire[Math.min(5, heat + 1)] : bgAt(sx, sy))
+        }
+      }
+      const word = { x: FACTORY.x - 3, y: FACTORY.y - 4 }
+      if (phase < 22 && visible(word)) {
+        const { sx, sy } = screen(word)
+        text(sx, sy, 'KABOOM!', w.tick % 4 < 2 ? 0xffeb3b : 0xff5252, 0x000000)
+      }
     }
   }
   if (party === 'summer' && isNight && !inMuseum) {
