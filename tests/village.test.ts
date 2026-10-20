@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import {
-  answerMore, applyDiary, applyProject, chooseReply, createWorld, diaryPrompt, echoTests, echoTool, echoTurn, enqueue, frame, parseActions, offerReplies, remember, postcard, restore, ROWS, snapshot, step, summary, systemPrompt, ticker, VILLAGERS,
+  answerMore, applyDiary, applyProject, chooseReply, createWorld, diaryPrompt, echoTests, echoTool, echoTurn, enqueue, explode, frame, parseActions, offerReplies, remember, postcard, restore, ROWS, snapshot, step, summary, systemPrompt, ticker, VILLAGERS,
 } from '../hooks/game'
 import { CHORES, mapPayload, statePayload } from '../hooks/web'
 
@@ -269,6 +269,40 @@ test('a museum tour walks past every donated piece and Hoot explains it', async 
   enqueue(w, [{ do: 'fish' }])
   run(w, 6000)
   expect(w.scene).toBe('village')
+})
+
+test('the bomb factory gets built, blows up, and Bruno patches it up', async () => {
+  const w = createWorld()
+  w.events = []
+  w.requests = []
+  w.bells = 2000
+  w.inv = { wood: 8 }
+  explode(w)
+  expect(w.boom).toBe(0)
+  enqueue(w, [{ do: 'fund', project: 'factory' }])
+  run(w, 3000)
+  expect(w.projects.factory.done).toBe(true)
+  expect(systemPrompt(w)).toContain('factory')
+  w.player.x = 68
+  w.player.y = 16
+  w.npcs.pip.x = 66
+  w.npcs.pip.y = 16
+  w.npcs.pip.asleep = false
+  const pipMood = w.mood.pip ?? 0
+  explode(w)
+  expect(w.boom).toBeGreaterThan(0)
+  expect(w.flash).toBeGreaterThan(0)
+  expect(w.rubble).toBeGreaterThan(0)
+  expect(w.announce.some(a => /bomb factory/i.test(a))).toBe(true)
+  expect(w.memory.claude.some(m => m.text.includes('bomb factory blew up'))).toBe(true)
+  expect(w.mood.pip).toBe(Math.min(2, pipMood + 1))
+  const rubble = w.rubble
+  explode(w)
+  expect(w.rubble).toBe(rubble)
+  for (let i = 0; i < 10; i++) { step(w); expect(frame(w, 80).length).toBe(80 * ROWS * 3) }
+  for (let i = 0; i < rubble && w.rubble > 0; i++) step(w)
+  expect(w.rubble).toBe(0)
+  expect(w.log.some(l => l.text.includes('Bruno rebuilt the bomb factory'))).toBe(true)
 })
 
 test('the Velvet Club gets built, opens at night, and Pip never goes there', async () => {
