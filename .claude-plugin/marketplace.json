@@ -8,14 +8,14 @@
   },
   "metadata": {
     "description": "Marketplace for the Cozy Village Claude Code plugin.",
-    "version": "0.5.0"
+    "version": "0.6.0"
   },
   "plugins": [
     {
       "name": "cozy-village",
       "source": "./",
       "description": "A cozy village pane where an AI villager farms, fishes and chats, steered by your wishes.",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "author": {
         "name": "Nico Reber"
       },
