@@ -1,14 +1,28 @@
 {
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "cozy-village",
   "description": "Cozy Village, a Claude Code plugin: a village pane where an AI villager lives, steered by your wishes.",
   "owner": {
-    "name": "Nico Reber"
+    "name": "Nico Reber",
+    "url": "https://github.com/NicoReber"
+  },
+  "metadata": {
+    "description": "Marketplace for the Cozy Village Claude Code plugin.",
+    "version": "0.3.0"
   },
   "plugins": [
     {
       "name": "cozy-village",
       "source": "./",
-      "description": "A cozy village pane where an AI villager farms, fishes and chats, steered by your wishes."
+      "description": "A cozy village pane where an AI villager farms, fishes and chats, steered by your wishes.",
+      "version": "0.3.0",
+      "author": {
+        "name": "Nico Reber"
+      },
+      "homepage": "https://github.com/NicoReber/cozy-village",
+      "repository": "https://github.com/NicoReber/cozy-village",
+      "keywords": ["village", "game", "pane", "cozy", "pixel-art"],
+      "category": "fun"
     }
   ]
 }
