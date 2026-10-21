@@ -22,6 +22,7 @@
       "homepage": "https://github.com/NicoReber/cozy-village",
       "repository": "https://github.com/NicoReber/cozy-village",
       "keywords": ["village", "game", "pane", "cozy", "pixel-art"],
+      "license": "MIT",
       "category": "fun"
     }
   ]
