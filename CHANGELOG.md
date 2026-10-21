@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-21
+
 ### Added
 - MIT license.
 - `/village stop` to stop the village and its browser server.
@@ -31,6 +33,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 ### Added
 - Initial release: a village pane where an AI villager farms, fishes and chats with its neighbours, steered by your wishes.
 
-[Unreleased]: https://github.com/NicoReber/cozy-village/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/NicoReber/cozy-village/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/NicoReber/cozy-village/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/NicoReber/cozy-village/releases/tag/v0.3.0
 [0.1.0]: https://github.com/NicoReber/cozy-village/releases/tag/v0.1.0
