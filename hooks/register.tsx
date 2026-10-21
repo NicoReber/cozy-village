@@ -51,6 +51,8 @@ let lastTicker = ''
 /** The browser view's server: started once, then fed the world every tick (see web/server.mjs). */
 const web = { started: false, port: 0, token: '', posting: false, mapSent: '', mapAt: -1, chat: [] as LogLine[] }
 let isAnswering = false
+/** The village's tick; null while the village is stopped. */
+let tick: { cancel: () => void } | null = null
 const TESTS = /\b(test|tests|vitest|jest|pytest|dotnet\s+test|cargo\s+test|npm\s+run\s+build|dotnet\s+build|tsc)\b/i
 
 function open($: EngineInterface, focus?: true) {
@@ -102,7 +104,7 @@ async function tellMore($: EngineInterface) {
 
 /** Starts the browser view's server once; it lives as long as this module, which kills it on unload. */
 function startWeb($: EngineInterface) {
-  if (web.started) return
+  if (web.started || !tick) return
   web.started = true
   const bytes = crypto.getRandomValues(new Uint8Array(16))
   web.token = [...bytes].map(b => b.toString(16).padStart(2, '0')).join('')
@@ -178,15 +180,10 @@ export const register: Register = (on, options) => {
   MODEL = typeof options.model === 'string' && options.model ? options.model : 'haiku'
   world.adults = options.nightclub === true
 
-  on('session.start', async ($, e, next) => {
-    await $.command.register({
-      name: 'village',
-      description: 'Open the cozy village; "/village web" opens it in your browser, "/village memory" shows what everyone remembers, "/village forget" wipes it',
-      argumentHint: '[web|memory|forget]',
-    })
-    restore(world, await $.store.get(STORE_KEY))
-
-    $.clock.every(150, async () => {
+  /** The village only runs between a start (`/village`, auto-open, the ticker) and a stop (`/village stop`). */
+  const startClock = ($: EngineInterface) => {
+    if (tick) return
+    tick = $.clock.every(150, async () => {
       step(world)
       const lines = world.log.splice(0)
       if (lines.length) {
@@ -216,6 +213,27 @@ export const register: Register = (on, options) => {
         void $.store.set(STORE_KEY, snapshot(world))
       }
     })
+  }
+
+  const stopVillage = async ($: EngineInterface) => {
+    tick?.cancel()
+    tick = null
+    const port = web.port
+    if (port) await $.http.fetch(`http://127.0.0.1:${port}/api/stop`, { method: 'POST', headers: { 'x-village-token': web.token } }).catch(() => {})
+    await $.store.set(STORE_KEY, snapshot(world))
+    if (showTicker) $.ui.status(undefined)
+    lastTicker = ''
+  }
+
+  on('session.start', async ($, e, next) => {
+    await $.command.register({
+      name: 'village',
+      description: 'Open the cozy village; "/village web" opens it in your browser, "/village stop" stops it for good, "/village memory" shows what everyone remembers, "/village forget" wipes it',
+      argumentHint: '[web|stop|memory|forget]',
+    })
+    restore(world, await $.store.get(STORE_KEY))
+
+    if (autoOpen || showTicker) startClock($)
 
     if (autoOpen) void open($)
     if (!showTicker) $.ui.status(undefined)
@@ -242,7 +260,13 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'village' }, async ($, e) => {
     const arg = e.args.trim().toLowerCase()
     if (arg === 'memory') return { text: memoryReport() }
+    if (arg === 'stop') {
+      await stopVillage($)
+      await $.ui.close({ id: PANE })
+      return { text: 'The village is stopped: nothing runs in the background now. /village starts it again.' }
+    }
     if (arg === 'web') {
+      startClock($)
       startWeb($)
       for (let i = 0; i < 40 && !web.port; i++) await $.clock.sleep(100)
       const url = await read($, webLink)
@@ -258,6 +282,7 @@ export const register: Register = (on, options) => {
       await $.store.set(STORE_KEY, snapshot(world))
       return { text: 'Everyone in the village forgot everything. Fresh start!' }
     }
+    startClock($)
     await open($, true)
     return { text: 'Welcome to the village! Type a wish into the field below the map.' }
   })

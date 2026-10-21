@@ -77,6 +77,11 @@ async function handle(req, res) {
     }
     return
   }
+  if (req.method === 'POST' && url.pathname === '/api/stop') {
+    res.writeHead(204).end()
+    setTimeout(() => process.exit(0), 50)
+    return
+  }
   if (req.method === 'POST' && url.pathname === '/api/do') {
     try {
       const action = JSON.parse(await body(req, 4000))

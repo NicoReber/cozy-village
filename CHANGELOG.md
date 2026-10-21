@@ -7,6 +7,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Added
 - MIT license.
+- `/village stop` to stop the village and its browser server.
+
+### Fixed
+- The village no longer starts by itself at session start: it runs once opened (`/village`, auto-open or the ticker) until `/village stop`. Closing the pane leaves it running, so the browser view keeps going.
 
 ## [0.3.0] - 2026-10-20
 

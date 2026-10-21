@@ -85,6 +85,7 @@ To load it in every session without installing, set `CLAUDE_CODE_PLUGIN_DIRS` to
 | **Postcard** | Copies the scene to the clipboard |
 | **Museum tour** | Walk through the museum once it is built |
 | **Open in my browser** | Desktop app: opens the browser view (`/village web` anywhere) |
+| `/village stop` | Stops the village and its browser server (closing the pane does not) |
 | `/village memory` | Prints every character's memory |
 | `/village forget` | Wipes all memories and friendships |
 
