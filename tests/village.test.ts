@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import {
-  answerMore, applyDiary, applyProject, chooseReply, createWorld, diaryPrompt, echoTests, echoTool, echoTurn, enqueue, explode, frame, parseActions, offerReplies, remember, postcard, restore, ROWS, snapshot, step, summary, systemPrompt, ticker, VILLAGERS,
+  answerMore, applyDiary, applyProject, BIKES, charge, chooseReply, createWorld, diaryPrompt, echoTests, echoTool, echoTurn, enqueue, explode, frame, KIND_AT, parseActions, offerReplies, remember, postcard, restore, ROWS, snapshot, step, summary, systemPrompt, ticker, VILLAGERS,
 } from '../hooks/game'
 import { CHORES, mapPayload, statePayload } from '../hooks/web'
 
@@ -504,4 +504,101 @@ test('the browser view gets the whole map and everyone who moves', async () => {
 
 test('chores from the browser are the same plans as the Quick bar', async () => {
   for (const c of Object.values(CHORES)) expect(parseActions(JSON.stringify(c.plan)).length).toBe(c.plan.length)
+})
+
+/** A village with the AI data center (and optionally the bomb factory) built, and no events. */
+const dataCenterVillage = (withFactory: boolean) => {
+  const w = createWorld()
+  w.events = []
+  w.requests = []
+  for (const id of withFactory ? ['datacenter', 'factory'] as const : ['datacenter'] as const) {
+    w.projects[id].done = true
+    applyProject(w, id)
+  }
+  return w
+}
+
+test('the AI data center gets funded and built, with three bikes beside it', async () => {
+  const w = createWorld()
+  w.events = []
+  w.requests = []
+  w.bells = 2200
+  w.inv = { wood: 8 }
+  expect(systemPrompt(w)).toContain('datacenter')
+  enqueue(w, [{ do: 'fund', project: 'datacenter' }])
+  run(w, 3000)
+  expect(w.projects.datacenter.done).toBe(true)
+  expect(w.places.datacenter).toBeDefined()
+  for (const b of BIKES) {
+    expect(w.tiles[b.y * 96 + b.x]).toBe('path')
+    expect(w.deco[b.y * 96 + b.x - 1]?.[0]).toBe('Ø')
+    expect(w.deco[b.y * 96 + b.x + 1]?.[0]).toBe('ø')
+  }
+  expect(ticker(w)).toContain('⚡')
+  expect(statePayload(w, []).datacenter).toEqual({ battery: 80, mood: 'kind' })
+})
+
+test('a kind data center computes Bells and apples every three hours', async () => {
+  const w = dataCenterVillage(false)
+  w.dc.battery = 80
+  w.minutes = 179.5
+  const bells = w.bells
+  const apples = w.inv.apple ?? 0
+  step(w)
+  expect(w.bells).toBeGreaterThan(bells)
+  expect(w.inv.apple).toBe(apples + 2)
+  expect(w.log.some(l => l.text.includes('AI data center computed'))).toBe(true)
+})
+
+test('a data center that runs flat turns evil and blows up the bomb factory, until it is pedaled back', async () => {
+  const w = dataCenterVillage(true)
+  w.dc.battery = 0
+  w.minutes = 2 * 60
+  step(w)
+  expect(w.dc.evil).toBe(true)
+  expect(w.rubble).toBeGreaterThan(0)
+  expect(w.announce.some(a => /turned EVIL/.test(a))).toBe(true)
+  expect(w.log.some(l => l.text.includes('evil AI data center hacked the bomb factory'))).toBe(true)
+  expect(frame(w, 80).length).toBe(80 * ROWS * 3)
+  // no Bells while it is evil
+  const bells = w.bells
+  w.minutes = 179.5
+  step(w)
+  expect(w.bells).toBe(bells)
+  // pedaled back to half, it reboots kind
+  charge(w, KIND_AT)
+  step(w)
+  expect(w.dc.evil).toBe(false)
+  expect(w.announce.some(a => /kind again/.test(a))).toBe(true)
+})
+
+test('villagers ride the bikes when the battery runs low, and Claude can pedal too', async () => {
+  const w = dataCenterVillage(false)
+  w.dc.battery = 40
+  w.minutes = 10 * 60
+  for (let i = 0; i < 300; i++) step(w)
+  const riding = VILLAGERS.filter(v => BIKES.some(b => b.x === w.npcs[v.id].x && b.y === w.npcs[v.id].y))
+  expect(riding.length).toBeGreaterThanOrEqual(2)
+  expect(w.dc.battery).toBeGreaterThan(40)
+
+  expect(parseActions('[{"do":"pedal"}]')).toEqual([{ do: 'pedal' }])
+  const solo = dataCenterVillage(false)
+  solo.dc.battery = 30
+  solo.minutes = 21 * 60
+  enqueue(solo, [{ do: 'pedal' }])
+  run(solo, 2000)
+  expect(solo.dc.battery).toBeGreaterThan(30)
+  expect(solo.log.some(l => l.text.startsWith('Pedaled the AI data center'))).toBe(true)
+})
+
+test('the data center battery and mood survive a save', async () => {
+  const w = dataCenterVillage(false)
+  w.dc.battery = 12
+  w.dc.evil = true
+  const again = createWorld()
+  restore(again, JSON.parse(JSON.stringify(snapshot(w))))
+  expect(again.projects.datacenter.done).toBe(true)
+  expect(again.dc.battery).toBe(12)
+  expect(again.dc.evil).toBe(true)
+  expect(again.deco[BIKES[0].y * 96 + BIKES[0].x - 1]?.[0]).toBe('Ø')
 })

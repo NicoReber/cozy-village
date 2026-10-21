@@ -118,7 +118,7 @@ const LOOKS = {
 }
 const WORK_ICON = {
   plant: '🌱', water: '💧', harvest: '🧺', fish: '🎣', chop: '🪓', shake: '🍎', pick: '🌸', sell: '💰', sleep: '💤', pet: '🐾', gift: '🎁', buy: '🛍️', trade: '🤝',
-  shop: '🛍️', cook: '🍳', fund: '🏛️', donate: '🦉', place: '🪑', dig: '⛏️', club: '🎵',
+  shop: '🛍️', cook: '🍳', fund: '🏛️', donate: '🦉', place: '🪑', dig: '⛏️', club: '🎵', pedal: '🚲',
   'echo:edit': '✏️', 'echo:shell': '⚙️', 'echo:read': '📖', 'echo:web': '🌐', 'echo:agent': '🤝', 'echo:other': '✨',
 }
 
@@ -520,8 +520,39 @@ function drawDeco(c, glyph, X, Y, now) {
     case 'o': c.drawImage(sprite('pot', 8, 7, g => paint(g, ART.pot, { p: '#f06292', y: '#ffd54f', g: '#5fae45', o: '#8d4a2f', c: '#d1693f' })), X + 4, Y + 8); break
     case '^': c.drawImage(sprite('birdhouse', 8, 13, g => paint(g, ART.birdhouse, { r: '#e57373', w: '#d7ccc8', o: '#4e342e', b: '#6d4c41' })), X + 4, Y + 2); break
     case 'Ω': c.drawImage(sprite('statue', 8, 13, g => paint(g, ART.statue, { s: '#eceff1', g: '#90a4ae', G: '#b0bec5' })), X + 4, Y - 2); break
+    // a fixed bike at the AI data center: the left wheel draws all of it, across three tiles; the right wheel is part of it
+    case 'Ø': drawBike(c, X, Y, now); break
+    case 'ø': break
     default: c.fillStyle = '#ffd54f'; c.fillRect(X + 6, Y + 8, 4, 4)
   }
+}
+
+function drawBike(c, X, Y, now) {
+  const seat = { x: X / T + 1, y: Y / T }
+  const ridden = !!state?.movers?.some(m => m.k !== 'mochi' && Math.round(m.x) === seat.x && Math.round(m.y) === seat.y)
+  const spin = ridden ? now / 120 : 0
+  // the stand that keeps it in place
+  c.fillStyle = '#546e7a'; c.fillRect(X + 4, Y + 15, 40, 1)
+  for (const cx of [X + 8, X + 40]) {
+    c.strokeStyle = '#263238'; c.lineWidth = 1.5
+    c.beginPath(); c.arc(cx, Y + 10, 5, 0, Math.PI * 2); c.stroke()
+    c.strokeStyle = '#90a4ae'; c.lineWidth = 0.75
+    for (let k = 0; k < 3; k++) {
+      const a = spin + k * Math.PI / 3
+      c.beginPath(); c.moveTo(cx - Math.cos(a) * 4.5, Y + 10 - Math.sin(a) * 4.5); c.lineTo(cx + Math.cos(a) * 4.5, Y + 10 + Math.sin(a) * 4.5); c.stroke()
+    }
+  }
+  c.strokeStyle = '#26a69a'; c.lineWidth = 1.5
+  c.beginPath()
+  c.moveTo(X + 8, Y + 10); c.lineTo(X + 22, Y + 10); c.lineTo(X + 40, Y + 10)
+  c.moveTo(X + 22, Y + 10); c.lineTo(X + 20, Y + 3)
+  c.moveTo(X + 22, Y + 10); c.lineTo(X + 36, Y + 3); c.lineTo(X + 40, Y + 10)
+  c.stroke()
+  c.fillStyle = '#3e2723'; c.fillRect(X + 17, Y + 2, 6, 2)
+  c.fillStyle = '#37474f'; c.fillRect(X + 34, Y + 1, 5, 2)
+  // the cable to the data center
+  c.strokeStyle = 'rgba(255,213,79,.8)'; c.lineWidth = 1
+  c.beginPath(); c.moveTo(X + 40, Y + 15); c.lineTo(39 * T, Y + 15); c.stroke()
 }
 
 // ---------- the state, and walking between ticks ----------
@@ -869,6 +900,33 @@ function frame(now) {
         ctx.strokeText('KABOOM!', cx, cy - T * z); ctx.fillText('KABOOM!', cx, cy - T * z)
       }
     }
+  }
+  // the AI data center: its battery gauge and mood above the roof, and a red glare once it turns evil
+  if (state.datacenter && !museum) {
+    const { battery, mood } = state.datacenter
+    const [bx, by] = toScreen(39 * T, 19 * T)
+    const bw = 7 * T * z, bh = 4 * T * z
+    if (mood === 'evil') {
+      const pulse = 0.25 + 0.2 * Math.sin(now / 180)
+      const glow = ctx.createRadialGradient(bx + bw / 2, by + bh / 2, 0, bx + bw / 2, by + bh / 2, bw)
+      glow.addColorStop(0, `rgba(255,23,68,${pulse})`)
+      glow.addColorStop(1, 'rgba(255,23,68,0)')
+      ctx.fillStyle = glow
+      ctx.beginPath(); ctx.arc(bx + bw / 2, by + bh / 2, bw, 0, Math.PI * 2); ctx.fill()
+    }
+    const gw = bw * 0.7, gh = 5 * z
+    const gx = bx + (bw - gw) / 2, gy = by - 12 * z
+    ctx.fillStyle = '#263238'; ctx.fillRect(gx - z, gy - z, gw + 2 * z, gh + 2 * z)
+    ctx.fillStyle = battery >= 50 ? '#69f0ae' : battery >= 15 ? '#ffd54f' : '#ff5252'
+    ctx.fillRect(gx, gy, gw * battery / 100, gh)
+    ctx.fillStyle = '#263238'; ctx.fillRect(gx + gw + z, gy + gh * 0.25, 2 * z, gh * 0.5)
+    ctx.font = `bold ${Math.round(9 * z)}px system-ui`
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+    ctx.lineWidth = 2 * dpr; ctx.strokeStyle = '#000000'
+    const face = mood === 'evil' ? '>:(' : mood === 'kind' ? (Math.floor(now / 3000) % 8 === 7 ? '-_-' : '^_^') : 'o_o'
+    ctx.fillStyle = mood === 'evil' ? '#ff1744' : mood === 'kind' ? '#80deea' : '#ffd54f'
+    const label = `${face}  ⚡${battery}%`
+    ctx.strokeText(label, bx + bw / 2, gy - 8 * z); ctx.fillText(label, bx + bw / 2, gy - 8 * z)
   }
   if (z >= 1.5 * dpr) {
     ctx.textAlign = 'center'

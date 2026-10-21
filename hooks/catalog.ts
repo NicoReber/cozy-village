@@ -77,7 +77,7 @@ export const FISH_SIZE: Record<string, [number, number]> = {
   sturgeon: [80, 250], trout: [25, 70], catfish: [30, 120], salmon: [50, 110], pike: [40, 130],
 }
 
-export type ProjectId = 'lamps' | 'benches' | 'park' | 'pier' | 'museum' | 'club' | 'factory'
+export type ProjectId = 'lamps' | 'benches' | 'park' | 'pier' | 'museum' | 'club' | 'factory' | 'datacenter'
 export const PROJECTS: Record<ProjectId, { name: string; bells: number; items: Record<string, number>; about: string }> = {
   benches: { name: 'Plaza benches', bells: 800, items: { wood: 6 }, about: 'benches around the fountain' },
   park: { name: 'Riverside park', bells: 1200, items: { flower: 5 }, about: 'flower beds along the river' },
@@ -85,6 +85,7 @@ export const PROJECTS: Record<ProjectId, { name: string; bells: number; items: R
   pier: { name: 'Fishing pier', bells: 2000, items: { wood: 8 }, about: 'a pier into the pond where rare fish bite' },
   museum: { name: 'Museum', bells: 3000, items: { wood: 10 }, about: 'donate fish and star fragments to fill its collection' },
   factory: { name: 'Bomb factory', bells: 1800, items: { wood: 8 }, about: 'a rickety workshop full of fireworks and cartoon bombs - it blows up now and then, so stand well back' },
+  datacenter: { name: 'AI data center', bells: 2200, items: { wood: 8 }, about: 'a humming server hall run on three fixed bikes - kept charged it is kind and computes Bells and apples, run flat it turns evil and blows up the bomb factory' },
   club: { name: 'Velvet Club', bells: 2500, items: { wood: 6 }, about: 'an adults-only strip club with a neon sign, open 21:00-03:00' },
 }
 export const isProject = (v: unknown): v is ProjectId => typeof v === 'string' && v in PROJECTS
