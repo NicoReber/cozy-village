@@ -8,6 +8,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 ### Added
 - MIT license.
 - `/village stop` to stop the village and its browser server.
+- A **Village info** panel in the browser with requests, project progress, the museum collection and everyone's memories, as in the pane.
+
+### Removed
+- The reply buttons in the pane and the browser that appeared when a villager greeted Claude.
 
 ### Fixed
 - The village no longer starts by itself at session start: it runs once opened (`/village`, auto-open or the ticker) until `/village stop`. Closing the pane leaves it running, so the browser view keeps going.

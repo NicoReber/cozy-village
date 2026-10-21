@@ -23,6 +23,7 @@ const FILES = {
 
 let map = ''
 let state = ''
+let info = ''
 let inbox = []
 let lastPost = Date.now()
 const clients = new Set()
@@ -58,6 +59,7 @@ async function handle(req, res) {
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' })
     res.write('retry: 1000\n\n')
     if (map) send(res, 'map', map)
+    if (info) send(res, 'info', info)
     if (state) send(res, 'state', state)
     clients.add(res)
     req.on('close', () => clients.delete(res))
@@ -68,6 +70,7 @@ async function handle(req, res) {
       const parsed = JSON.parse(await body(req))
       lastPost = Date.now()
       if (parsed.map) { map = JSON.stringify(parsed.map); broadcast('map', map) }
+      if (parsed.info) { info = JSON.stringify(parsed.info); broadcast('info', info) }
       if (parsed.state) { state = JSON.stringify(parsed.state); broadcast('state', state) }
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ inbox, viewers: clients.size }))

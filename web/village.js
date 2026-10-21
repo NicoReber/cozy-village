@@ -954,9 +954,79 @@ requestAnimationFrame(frame)
 // ---------- the panels ----------
 
 const post = action => fetch(`/api/do?k=${encodeURIComponent(KEY)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(action) }).catch(() => {})
+let info = null
+let infoTab = 'village'
+let infoShown = ''
+
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e }
+const meter = (pct, cls = '') => { const m = el('div', `meter ${cls}`); const i = el('i'); i.style.width = `${Math.round(pct * 100)}%`; m.append(i); return m }
+const cap = t => t[0].toUpperCase() + t.slice(1)
+
+function villageRows() {
+  const out = []
+  out.push(el('h4', '', 'Requests'))
+  if (!info.requests.length) out.push(el('div', 'sub', 'No requests today.'))
+  for (const r of info.requests) {
+    const row = el('div', 'row'); const who = el('b', '', r.who); who.style.color = r.color
+    row.append(who, r.done ? el('span', 'done', '\u2713 done') : el('span', '', `wants ${r.left} ${r.item} \u00b7 pays ${r.reward} Bells`))
+    out.push(row)
+  }
+  out.push(el('h4', '', 'Projects'))
+  for (const p of info.projects) {
+    const row = el('div', 'row top')
+    row.append(el('span', '', p.name))
+    const col = el('div')
+    if (p.done) col.append(el('span', 'done', '\u2713 built'))
+    else col.append(meter(p.pct), el('div', 'sub', `${p.bells}/${p.need} Bells${p.items.length ? ' \u00b7 ' + p.items.map(i => `${i.have}/${i.need} ${i.name}`).join(', ') : ''}`))
+    row.append(col); out.push(row)
+  }
+  const total = info.museum.sections.reduce((a, s) => a + s.total, 0)
+  const have = info.museum.sections.reduce((a, s) => a + s.have, 0)
+  out.push(el('h4', '', `Museum \u00b7 ${have}/${total} pieces`))
+  if (!info.museum.open) out.push(el('div', 'sub', 'Not built yet - fund it on the plaza board.'))
+  else {
+    for (const s of info.museum.sections) {
+      const row = el('div', 'row top'); row.append(el('span', '', cap(s.name)))
+      const col = el('div'); col.append(meter(s.have / Math.max(1, s.total), 'blue'), el('div', 'sub', `${s.have}/${s.total}`))
+      const pieces = el('div', 'pieces')
+      for (const p of s.pieces) pieces.append(el('span', p.got ? 'got' : '', p.name))
+      col.append(pieces); row.append(col); out.push(row)
+    }
+    out.push(el('div', 'sub', `Complete it for ${info.museum.reward.toLocaleString('en-US')} Bells.`))
+  }
+  return out
+}
+
+function memoryRows() {
+  const out = []
+  for (const p of info.people) {
+    const row = el('div', 'row top'); const who = el('b', '', p.name); who.style.color = p.color
+    const head = el('div'); head.append(who)
+    if (p.hearts !== null) head.append(' ', el('span', 'heart', `\u2665 ${p.hearts}`))
+    const col = el('div'); col.append(el('div', '', p.diary))
+    if (p.facts.length) col.append(el('div', 'sub', `knows: ${p.facts.join(' \u00b7 ')}`))
+    row.append(head, col); out.push(row)
+  }
+  return out
+}
+
+function renderInfo() {
+  if (!info || !$('info').classList.contains('show')) return
+  const key = infoTab + JSON.stringify(info)
+  if (key === infoShown) return
+  infoShown = key
+  const box = $('infoBody'); const top = box.scrollTop
+  box.replaceChildren(...(infoTab === 'village' ? villageRows() : memoryRows()))
+  box.scrollTop = top
+}
+const showInfoTab = t => { infoTab = t; $('tabVillage').classList.toggle('on', t === 'village'); $('tabMemories').classList.toggle('on', t === 'memories'); renderInfo() }
+$('infoBtn').onclick = () => { $('info').classList.toggle('show'); $('infoBtn').classList.toggle('on', $('info').classList.contains('show')); renderInfo() }
+$('closeInfo').onclick = () => { $('info').classList.remove('show'); $('infoBtn').classList.remove('on') }
+$('tabVillage').onclick = () => showInfoTab('village')
+$('tabMemories').onclick = () => showInfoTab('memories')
+
 let logKey = ''
 let choreKey = ''
-let replyKey = ''
 
 function updateHud() {
   const s = state
@@ -991,18 +1061,6 @@ function updateHud() {
     choreKey = ck
     $('chores').replaceChildren(...s.chores.map(c => { const b = document.createElement('button'); b.textContent = c.label; b.onclick = () => post({ kind: 'chore', key: c.key }); return b }))
   }
-  const rk = s.reply ? s.reply.who + s.reply.line : ''
-  if (rk !== replyKey) {
-    replyKey = rk
-    $('reply').classList.toggle('show', !!s.reply)
-    if (s.reply) {
-      const line = $('replyLine')
-      line.replaceChildren()
-      const who = document.createElement('b'); who.style.color = s.reply.color; who.textContent = s.reply.who
-      line.append(who, ` “${s.reply.line}”`)
-      $('replyOpts').replaceChildren(...s.reply.options.map((o, k) => { const b = document.createElement('button'); b.textContent = o; b.onclick = () => { post({ kind: 'reply', index: k }); $('reply').classList.remove('show') }; return b }))
-    }
-  }
 }
 
 $('wish').onsubmit = e => {
@@ -1026,6 +1084,7 @@ function connect() {
     buildMap(map)
     if (first) { cam.zoom = 3 * devicePixelRatio; clampCam() }
   })
+  events.addEventListener('info', e => { info = JSON.parse(e.data); renderInfo() })
   events.addEventListener('state', e => { alive = performance.now(); onState(JSON.parse(e.data)); $('offline').classList.add('hide') })
   events.onerror = () => $('offline').classList.remove('hide')
   setInterval(() => { if (performance.now() - alive > 4000) $('offline').classList.remove('hide') }, 1000)

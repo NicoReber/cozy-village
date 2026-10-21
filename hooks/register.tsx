@@ -5,10 +5,10 @@ import type { LogLine, Tab } from '../types'
 import { MUSEUM, PROJECTS } from './catalog'
 import type { ProjectId } from './catalog'
 import {
-  answerMore, applyDiary, chooseReply, createWorld, DIARY_SYSTEM, diaryPrompt, echoTests, echoTool, echoTurn, encode, enqueue, frame, heardWish, MAX_VIEW,
-  memoryText, MORE_SYSTEM, moreContext, parseActions, postcard, projectIds, restore, ROWS, sayPlayer, snapshot, step, summary, systemPrompt, ticker, VILLAGERS,
+  applyDiary, createWorld, DIARY_SYSTEM, diaryPrompt, echoTests, echoTool, echoTurn, encode, enqueue, frame, heardWish, MAX_VIEW,
+  memoryText, parseActions, postcard, projectIds, restore, ROWS, sayPlayer, snapshot, step, summary, systemPrompt, ticker, VILLAGERS,
 } from './game'
-import { CHORES, mapPayload, statePayload } from './web'
+import { CHORES, infoPayload, mapPayload, statePayload } from './web'
 
 const PANE = 'cozy-village'
 /** The model behind the villagers; the `model` setting replaces it when the module loads. */
@@ -17,8 +17,6 @@ const STORE_KEY = 'world'
 const log = atom({ plugin: 'cozy-village', key: 'log' } as const, [] as LogLine[])
 const thinking = atom({ plugin: 'cozy-village', key: 'thinking' } as const, false)
 const tab = atom({ plugin: 'cozy-village', key: 'tab' } as const, 'chat' as Tab)
-/** Which reply offer is showing, `who@until`, or empty: drawing reads it so the row appears and goes away. */
-const replyKey = atom({ plugin: 'cozy-village', key: 'reply' } as const, '')
 /** The browser view's address once its server listens, empty before; the pane shows it. */
 const webLink = atom({ plugin: 'cozy-village', key: 'web' } as const, '')
 
@@ -49,8 +47,7 @@ let savedHour = -1
 let isReflecting = false
 let lastTicker = ''
 /** The browser view's server: started once, then fed the world every tick (see web/server.mjs). */
-const web = { started: false, port: 0, token: '', posting: false, mapSent: '', mapAt: -1, chat: [] as LogLine[] }
-let isAnswering = false
+const web = { started: false, port: 0, token: '', posting: false, mapSent: '', mapAt: -1, infoSent: '', infoAt: -1, chat: [] as LogLine[] }
 /** The village's tick; null while the village is stopped. */
 let tick: { cancel: () => void } | null = null
 const TESTS = /\b(test|tests|vitest|jest|pytest|dotnet\s+test|cargo\s+test|npm\s+run\s+build|dotnet\s+build|tsc)\b/i
@@ -92,16 +89,6 @@ async function reflect($: EngineInterface) {
   await $.store.set(STORE_KEY, snapshot(world))
 }
 
-/** A villager's in-character answer to "tell me more". */
-async function tellMore($: EngineInterface) {
-  const ask = world.askMore
-  if (!ask) return
-  isAnswering = true
-  const reply = await $.model.complete({ model: MODEL, system: MORE_SYSTEM, prompt: moreContext(world, ask.who, ask.line), maxTokens: 120, timeoutMs: 30000 })
-  answerMore(world, ask.who, reply.isAnswered ? reply.text : null)
-  isAnswering = false
-}
-
 /** Starts the browser view's server once; it lives as long as this module, which kills it on unload. */
 function startWeb($: EngineInterface) {
   if (web.started || !tick) return
@@ -115,7 +102,7 @@ function startWeb($: EngineInterface) {
         const port = /LISTENING (\d+)/.exec(text)
         if (stream === 'stdout' && port) {
           web.port = Number(port[1])
-          web.mapSent = ''
+          web.mapSent = ''; web.infoSent = ''
           await update($, webLink, () => `http://localhost:${web.port}/?k=${web.token}`)
         }
       }
@@ -138,18 +125,23 @@ async function feedWeb($: EngineInterface) {
       const next = JSON.stringify(mapPayload(world))
       if (next !== web.mapSent) { map = next; web.mapSent = next }
     }
-    const body = `{"state":${JSON.stringify(statePayload(world, web.chat))}${map ? `,"map":${map}` : ''}}`
+    let info: string | undefined
+    if (world.tick - web.infoAt >= 10 || !web.infoSent) {
+      web.infoAt = world.tick
+      const next = JSON.stringify(infoPayload(world))
+      if (next !== web.infoSent) { info = next; web.infoSent = next }
+    }
+    const body = `{"state":${JSON.stringify(statePayload(world, web.chat))}${map ? `,"map":${map}` : ''}${info ? `,"info":${info}` : ''}}`
     const res = await $.http.fetch(`http://127.0.0.1:${web.port}/api/state`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-village-token': web.token }, body })
-    if (!res.ok) { web.mapSent = ''; return }
+    if (!res.ok) { web.mapSent = ''; web.infoSent = ''; return }
     const { inbox } = JSON.parse(res.text) as { inbox?: { kind?: unknown; text?: unknown; key?: unknown; index?: unknown }[] }
     for (const a of inbox ?? []) {
       if (a.kind === 'wish' && typeof a.text === 'string') void ask($, a.text.slice(0, 500))
       else if (a.kind === 'chore' && typeof a.key === 'string' && CHORES[a.key]) enqueue(world, CHORES[a.key].plan as Parameters<typeof enqueue>[1])
-      else if (a.kind === 'reply' && typeof a.index === 'number') chooseReply(world, a.index)
       else if (a.kind === 'museum' && world.projects.museum.done) enqueue(world, [{ do: world.scene === 'museum' ? 'exit' : 'tour' }])
     }
   } catch {
-    web.mapSent = ''
+    web.mapSent = ''; web.infoSent = ''
   } finally {
     web.posting = false
   }
@@ -202,10 +194,6 @@ export const register: Register = (on, options) => {
         const line = ticker(world)
         if (line !== lastTicker) { lastTicker = line; $.ui.status(line) }
       }
-      if (world.reply && world.tick > world.reply.until) world.reply = null
-      const offer = world.reply ? `${world.reply.who}@${world.reply.until}` : ''
-      if (offer !== (await read($, replyKey))) await update($, replyKey, () => offer)
-      if (world.askMore && !isAnswering) void tellMore($)
 
       const hour = Math.floor(world.minutes / 60)
       if (hour !== savedHour) {
@@ -348,22 +336,6 @@ export const register: Register = (on, options) => {
       { key: 'quick-sell', label: 'Sell', plan: [{ do: 'sell' }] },
       { key: 'quick-mail', label: 'Mail', plan: [{ do: 'mail' }] },
     ]
-    // ---- answering a villager: three replies while the offer lasts ----
-    const offer = await read($, replyKey)
-    const pending = offer && world.reply ? world.reply : null
-    const replies = pending ? (
-      <Box flexDirection="row" columnGap={2} width={width}>
-        <Box flexShrink={1}>
-          <Text wrap="truncate"><Text bold color={COLORS[pending.who]}>{NAMES[pending.who]}</Text><Text italic>{` "${pending.line}"`}</Text></Text>
-        </Box>
-        <Box flexDirection="row" columnGap={2} flexShrink={0}>
-          {pending.options.map((o, k) => (
-            <Button key={`reply-${k}`} plain label={`› ${o.label}`} dimColor={o.kind === 'brush'} onPress={() => chooseReply(world, k)} />
-          ))}
-        </Box>
-      </Box>
-    ) : null
-
     const quick = (
       <Box flexDirection="row" columnGap={2} width={width}>
         <Text dimColor>Quick:</Text>
@@ -459,7 +431,7 @@ export const register: Register = (on, options) => {
           <Raster key="world" columns={viewCols} rows={ROWS} cells={encode(frame(world, viewCols))} />
           {tabs}
           {panel}
-          {replies ?? quick}
+          {quick}
           <Box borderStyle="round" borderColor={ACCENT} paddingX={1} width={width}>
             <Input key="wish" label="✎ " placeholder={placeholder} submitLabel="send" autoFocus onSubmit={submit} />
           </Box>
@@ -488,14 +460,14 @@ export const register: Register = (on, options) => {
         ) : null}
       </Box>
     )
-    if (e.surface === 'mobile') return <Box flexDirection="column">{browser}{tabs}{panel}{replies ?? quick}</Box>
+    if (e.surface === 'mobile') return <Box flexDirection="column">{browser}{tabs}{panel}{quick}</Box>
     const { Input } = $.ui.resolve(e)
     return (
       <Box flexDirection="column">
         {browser}
         {tabs}
         {panel}
-        {replies ?? quick}
+        {quick}
         <Box borderStyle="round" borderColor={ACCENT} paddingX={1}>
           <Input key="wish" label="✎ " placeholder={placeholder} submitLabel="send" onSubmit={submit} />
         </Box>

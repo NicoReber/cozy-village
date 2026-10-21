@@ -41,14 +41,27 @@
   input { flex: 1; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 7px 10px; outline: none; }
   input:focus { border-color: var(--accent); }
   form button { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
-  #reply { left: 50%; transform: translateX(-50%); bottom: 18px; padding: 10px 14px; display: none; max-width: min(640px, calc(100vw - 500px)); min-width: 300px; }
-  #reply.show { display: block; }
-  #reply p { margin: 0 0 8px; } #reply .opts { display: flex; flex-wrap: wrap; gap: 6px; }
+  #info { right: 12px; top: 64px; width: min(400px, calc(100vw - 24px)); max-height: calc(100vh - 150px); display: none; flex-direction: column; }
+  #info.show { display: flex; }
+  #info .tabs { display: flex; gap: 4px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  #info .tabs button { padding: 3px 10px; } #info .tabs .sp { flex: 1; }
+  #infoBody { overflow-y: auto; padding: 8px 12px 12px; display: flex; flex-direction: column; gap: 6px; }
+  #infoBody h4 { margin: 8px 0 0; font-size: 11px; letter-spacing: .6px; text-transform: uppercase; color: var(--gold); }
+  #infoBody h4:first-child { margin-top: 0; }
+  .row { display: grid; grid-template-columns: 96px 1fr; gap: 8px; align-items: center; }
+  .row.top { align-items: start; }
+  .meter { height: 8px; border-radius: 4px; background: var(--bg); overflow: hidden; border: 1px solid var(--line); }
+  .meter i { display: block; height: 100%; background: var(--good); }
+  .meter.blue i { background: #4fc3f7; }
+  .sub { color: var(--dim); font-size: 12px; } .done { color: var(--good); } .heart { color: #f48fb1; }
+  .pieces { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 3px; }
+  .pieces span { font-size: 11px; padding: 1px 6px; border-radius: 9px; background: var(--panel-2); color: var(--dim); }
+  .pieces span.got { background: #4fc3f733; color: var(--text); }
   #bag { right: 12px; bottom: 12px; padding: 8px 12px; max-width: 360px; color: var(--dim); }
   #bag b { color: var(--text); }
   #offline { position: fixed; inset: 0; display: grid; place-items: center; z-index: 3; background: #14171ccc; font-size: 15px; }
   #offline.hide { display: none; }
-  @media (max-width: 900px) { .chip.hide-small { display: none; } #reply { max-width: calc(100vw - 24px); bottom: 300px; } #bag { display: none; } }
+  @media (max-width: 900px) { .chip.hide-small { display: none; } #bag { display: none; } }
 </style>
 </head>
 <body>
@@ -61,6 +74,7 @@
   <div class="chip event hide-small" id="eventChip" hidden><b id="events"></b><small>today</small></div>
   <div class="spacer"></div>
   <div class="tools">
+    <button id="infoBtn" title="Projects, museum, requests and memories">Village info</button>
     <button id="museum" hidden title="Walk through the museum">Museum tour</button>
     <button id="follow" class="on" title="Keep the camera on Claude (double-click the map)">Follow</button>
     <button id="fit" title="Show the whole village">Whole village</button>
@@ -74,7 +88,10 @@
   <div class="chores" id="chores"></div>
   <form id="wish"><input id="wishText" autocomplete="off" placeholder='Tell Claude what to do, e.g. "buy pumpkin seeds and plant them"'><button>Send</button></form>
 </section>
-<section id="reply" class="panel"><p id="replyLine"></p><div class="opts" id="replyOpts"></div></section>
+<section id="info" class="panel">
+  <div class="tabs"><button id="tabVillage" class="on">Village</button><button id="tabMemories">Memories</button><span class="sp"></span><button id="closeInfo" title="Close">✕</button></div>
+  <div id="infoBody"></div>
+</section>
 <section id="bag" class="panel">🎒 <b id="bagText">empty</b></section>
 <div id="offline">Waiting for the village… (is the Claude Code session still open?)</div>
 <script type="module" src="village.js"></script>

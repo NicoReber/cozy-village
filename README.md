@@ -17,7 +17,6 @@ You steer it by typing wishes like *"buy pumpkin seeds and plant them"* or *"bri
 - **Claude and five neighbours**: Tom the fisherman, Rosa the florist, Bruno the carpenter, Pip the kid and Mabel from the café, plus Mochi the cat.
   Every villager has a daily routine, a mood, a friendship level with Claude and a memory.
   Their memory holds what happened, lasting facts, and a diary written at the end of each in-game day.
-- **Talk back**: when a villager greets Claude you can pick a reply (warm, *tell me more*, an apology, a gift…).
   Your choice changes their mood and friendship.
 - **A living calendar**:
   - Four seasons of seven days each, with their own colours, fish, bugs and festivals.
@@ -40,7 +39,8 @@ browser instead, as a pixel-art canvas game:
 - Pixel-art houses with shingled roofs, windows, signs and awnings, trees, fences, crops, bridges, lamps and a fountain, in the season's colours.
 - Villagers walk smoothly, wear their own outfits and name tags, and talk in speech bubbles; night falls with glowing lamps and windows; rain, snow, petals and fireworks.
 - Drag to look around, scroll to zoom, double-click (or **Follow**) to follow Claude, **Whole village** to see the entire island.
-- The chat, the chores, the replies and the wish field work from the page too.
+- The chat, the chores and the wish field work from the page too.
+- **Village info** opens a panel with the same details as the pane's tabs: requests, project progress, the museum collection and everyone's memories and friendship.
 
 In the desktop app, `/village` shows the village's link with **Open in my browser** and **Copy link**. To keep it inside
 the app, open the link in the desktop app's Browser pane (Ctrl+Shift+B on Windows, Cmd+Shift+B on macOS). In any
@@ -81,11 +81,11 @@ To load it in every session without installing, set `CLAUDE_CODE_PLUGIN_DIRS` to
 | Input field under the map | Type a wish; Claude plans it and carries it out |
 | Tabs: **Chat · Memories · Village** | The chat log, what everyone remembers, and projects / museum / requests |
 | **Quick** bar | One-click chores: fish, chop wood, water, harvest, sell, read mail (no model call) |
-| Reply row | Shows up when a villager talks to Claude; click a reply within about ten seconds |
 | **Postcard** | Copies the scene to the clipboard |
 | **Museum tour** | Walk through the museum once it is built |
+| **Village info** (browser) | Requests, project progress, museum collection and memories |
 | **Open in my browser** | Desktop app: opens the browser view (`/village web` anywhere) |
-| `/village stop` | Stops the village and its browser server (closing the pane does not) |
+| `/village stop` | Stops the village and its browser server; it keeps running until you do, even if you close the pane |
 | `/village memory` | Prints every character's memory |
 | `/village forget` | Wipes all memories and friendships |
 
@@ -108,7 +108,6 @@ The village calls the chosen model:
 
 - once per wish (the planning prompt is about 3–5k tokens)
 - once per in-game day for diaries, gossip, letters and the Gazette (a game day is about seven real minutes)
-- once per *tell me more* reply
 
 Nothing else talks to a model.
 

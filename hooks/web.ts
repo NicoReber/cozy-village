@@ -1,8 +1,8 @@
 // What the browser view is sent: the map when it changes, and the moving parts every tick.
 // Pure logic, no `$`: register.tsx posts these to the local server that web/server.mjs runs.
 
-import { BUGS, MUSEUM } from './catalog'
-import { active, clock, eventLabels, H, season, seasonDay, VILLAGERS, W } from './game'
+import { BUGS, MUSEUM, MUSEUM_REWARD, PROJECTS } from './catalog'
+import { active, clock, eventLabels, H, projectIds, season, seasonDay, VILLAGERS, W } from './game'
 import type { LogLine } from '../types'
 import type { World } from './game'
 import { caseAt, HALL_TITLES, IH, interiorTile, IW } from './museum'
@@ -118,10 +118,41 @@ export function statePayload(w: World, log: readonly LogLine[]) {
     cloud: w.cloud > 0,
     rainbow: w.rainbow,
     flash: w.flash,
-    reply: w.reply ? { who: NAMES[w.reply.who], color: COLORS[w.reply.who], line: w.reply.line, options: w.reply.options.map(o => o.label) } : null,
     museum: Object.entries(MUSEUM).map(([k, v]) => `${k} ${v.filter(m => donated.has(m)).length}/${v.length}`).join(' · '),
     museumOpen: w.projects.museum.done,
     chores: Object.entries(CHORES).map(([key, c]) => ({ key, label: c.label })),
     log: log.slice(-40).map(l => ({ who: NAMES[l.who] ?? l.who, color: COLORS[l.who] ?? '#cccccc', text: l.text, event: l.who === 'event' })),
+  }
+}
+
+/** What the pane's Village and Memories tabs show, for the browser's side panel: sent when it changes, not every tick. */
+export function infoPayload(w: World) {
+  const projects = projectIds(w).map(id => {
+    const def = PROJECTS[id]
+    const st = w.projects[id]
+    const items = Object.entries(def.items).map(([name, need]) => ({ name, have: Math.min(need, st.items[name] ?? 0), need }))
+    const have = st.bells + Object.values(st.items).reduce((a, b) => a + b, 0) * 100
+    const total = def.bells + Object.values(def.items).reduce((a, b) => a + b, 0) * 100
+    return { name: def.name, about: def.about, done: !!st.done, bells: st.bells, need: def.bells, items, pct: st.done ? 1 : Math.min(1, have / Math.max(1, total)) }
+  })
+  const donated = new Set(w.museum)
+  const sections = Object.entries(MUSEUM).map(([name, pieces]) => ({
+    name, have: pieces.filter(p => donated.has(p)).length, total: pieces.length, pieces: pieces.map(p => ({ name: p, got: donated.has(p) })),
+  }))
+  const people = ['claude', ...VILLAGERS.map(v => v.id)].map(id => {
+    const list = w.memory[id] ?? []
+    const diary = list.filter(m => m.kind === 'diary').slice(-1)[0]
+    const last = list.filter(m => m.kind === 'event').slice(-1)[0]
+    return {
+      name: NAMES[id], color: COLORS[id], hearts: id === 'claude' ? null : w.friendship[id] ?? 0,
+      diary: diary ? `Day ${diary.day}: ${diary.text}` : last ? last.text : 'no memories yet',
+      facts: list.filter(m => m.kind === 'fact').slice(-3).map(m => m.text),
+    }
+  })
+  return {
+    projects,
+    museum: { open: w.projects.museum.done, reward: MUSEUM_REWARD, sections },
+    requests: w.requests.map(r => ({ who: NAMES[r.who], color: COLORS[r.who], item: r.item, left: r.amount - r.given, reward: r.reward, done: !!r.done })),
+    people,
   }
 }
