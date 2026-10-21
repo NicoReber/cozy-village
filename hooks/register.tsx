@@ -50,6 +50,8 @@ let lastTicker = ''
 const web = { started: false, port: 0, token: '', posting: false, mapSent: '', mapAt: -1, infoSent: '', infoAt: -1, chat: [] as LogLine[] }
 /** The village's tick; null while the village is stopped. */
 let tick: { cancel: () => void } | null = null
+/** The `ticker` setting; set when the module registers. */
+let showTicker = false
 const TESTS = /\b(test|tests|vitest|jest|pytest|dotnet\s+test|cargo\s+test|npm\s+run\s+build|dotnet\s+build|tsc)\b/i
 
 function open($: EngineInterface, focus?: true) {
@@ -166,52 +168,52 @@ function memoryReport(): string {
   return blocks.join('\n\n')
 }
 
+/** The village only runs between a start (`/village`, auto-open, the ticker) and a stop (`/village stop`). */
+function startClock($: EngineInterface) {
+  if (tick) return
+  tick = $.clock.every(150, async () => {
+    step(world)
+    const lines = world.log.splice(0)
+    if (lines.length) {
+      web.chat = [...web.chat, ...lines].slice(-60)
+      await update($, log, list => [...list, ...lines].slice(-60))
+    }
+    if (web.port && !web.posting) void feedWeb($)
+    for (const headline of world.announce.splice(0)) $.ui.toast(`★ ${headline}`)
+    if (world.diaryDue.length && !isReflecting) void reflect($)
+
+    if (surface === 'terminal') {
+      void $.ui.blit({ requestId: PANE, key: 'world', columns: viewCols, rows: ROWS, cells: encode(frame(world, viewCols)) })
+    }
+
+    if (showTicker && world.tick % 20 === 0) {
+      const line = ticker(world)
+      if (line !== lastTicker) { lastTicker = line; $.ui.status(line) }
+    }
+
+    const hour = Math.floor(world.minutes / 60)
+    if (hour !== savedHour) {
+      savedHour = hour
+      void $.store.set(STORE_KEY, snapshot(world))
+    }
+  })
+}
+
+async function stopVillage($: EngineInterface) {
+  tick?.cancel()
+  tick = null
+  const port = web.port
+  if (port) await $.http.fetch(`http://127.0.0.1:${port}/api/stop`, { method: 'POST', headers: { 'x-village-token': web.token } }).catch(() => {})
+  await $.store.set(STORE_KEY, snapshot(world))
+  if (showTicker) $.ui.status(undefined)
+  lastTicker = ''
+}
+
 export const register: Register = (on, options) => {
   const autoOpen = options.autoOpen === true
-  const showTicker = options.ticker === true
+  showTicker = options.ticker === true
   MODEL = typeof options.model === 'string' && options.model ? options.model : 'haiku'
   world.adults = options.nightclub === true
-
-  /** The village only runs between a start (`/village`, auto-open, the ticker) and a stop (`/village stop`). */
-  const startClock = ($: EngineInterface) => {
-    if (tick) return
-    tick = $.clock.every(150, async () => {
-      step(world)
-      const lines = world.log.splice(0)
-      if (lines.length) {
-        web.chat = [...web.chat, ...lines].slice(-60)
-        await update($, log, list => [...list, ...lines].slice(-60))
-      }
-      if (web.port && !web.posting) void feedWeb($)
-      for (const headline of world.announce.splice(0)) $.ui.toast(`★ ${headline}`)
-      if (world.diaryDue.length && !isReflecting) void reflect($)
-
-      if (surface === 'terminal') {
-        void $.ui.blit({ requestId: PANE, key: 'world', columns: viewCols, rows: ROWS, cells: encode(frame(world, viewCols)) })
-      }
-
-      if (showTicker && world.tick % 20 === 0) {
-        const line = ticker(world)
-        if (line !== lastTicker) { lastTicker = line; $.ui.status(line) }
-      }
-
-      const hour = Math.floor(world.minutes / 60)
-      if (hour !== savedHour) {
-        savedHour = hour
-        void $.store.set(STORE_KEY, snapshot(world))
-      }
-    })
-  }
-
-  const stopVillage = async ($: EngineInterface) => {
-    tick?.cancel()
-    tick = null
-    const port = web.port
-    if (port) await $.http.fetch(`http://127.0.0.1:${port}/api/stop`, { method: 'POST', headers: { 'x-village-token': web.token } }).catch(() => {})
-    await $.store.set(STORE_KEY, snapshot(world))
-    if (showTicker) $.ui.status(undefined)
-    lastTicker = ''
-  }
 
   on('session.start', async ($, e, next) => {
     await $.command.register({
