@@ -1,6 +1,6 @@
 {
   "name": "cozy-village",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "A cozy Stardew/Animal-Crossing-style village pane where Claude lives, farms, fishes and chats in speech bubbles - prompt it from the pane's input field.",
   "types": "./types/index.d.ts",
   "author": {

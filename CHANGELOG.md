@@ -5,6 +5,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-21
 ### Added
 - An **AI data center** community project, powered by three fixed bikes beside it. Its battery drains all the time; villagers take turns pedaling when it runs low, and Claude can pedal too (`{"do":"pedal"}`).
 - Charged to 50% or more, the data center is kind and computes Bells and apples every three hours. Run flat, it turns evil and blows up the bomb factory, again and again, until it is pedaled back to 50%.
