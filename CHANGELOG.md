@@ -5,6 +5,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+- Claude can lock the bikes (`{"do":"lock"}`, and `unlock` again): nobody can pedal then, so the data center runs flat and turns evil on purpose.
+
 ## [0.5.0] - 2026-10-21
 ### Added
 - An **AI data center** community project, powered by three fixed bikes beside it. Its battery drains all the time; villagers take turns pedaling when it runs low, and Claude can pedal too (`{"do":"pedal"}`).
