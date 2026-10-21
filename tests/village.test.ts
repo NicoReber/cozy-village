@@ -602,3 +602,22 @@ test('the data center battery and mood survive a save', async () => {
   expect(again.dc.evil).toBe(true)
   expect(again.deco[BIKES[0].y * 96 + BIKES[0].x - 1]?.[0]).toBe('Ø')
 })
+
+test('locked bikes keep everyone off them, so the data center runs flat and turns evil', async () => {
+  const w = dataCenterVillage(true)
+  w.dc.battery = 3
+  w.minutes = 10 * 60
+  expect(parseActions('[{"do":"lock"},{"do":"unlock"}]')).toEqual([{ do: 'lock' }, { do: 'unlock' }])
+  enqueue(w, [{ do: 'lock' }])
+  run(w, 2000)
+  expect(w.dc.locked).toBe(true)
+  for (let i = 0; i < 300 && !w.dc.evil; i++) step(w)
+  expect(VILLAGERS.some(v => BIKES.some(b => b.x === w.npcs[v.id].x && b.y === w.npcs[v.id].y))).toBe(false)
+  expect(w.dc.evil).toBe(true)
+  enqueue(w, [{ do: 'pedal' }])
+  run(w, 2000)
+  expect(w.dc.battery).toBe(0)
+  enqueue(w, [{ do: 'unlock' }])
+  run(w, 2000)
+  expect(w.dc.locked).toBe(false)
+})
