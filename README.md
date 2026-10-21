@@ -24,7 +24,7 @@ You steer it by typing wishes like *"buy pumpkin seeds and plant them"* or *"bri
   - Villager gossip and a morning *Village Gazette*.
 - **Things to do with your Bells**:
   - Crops and seeds, cooking at the café, decorations.
-  - Community projects that change the map: benches, a riverside park, street lamps, a fishing pier, a museum, and a bomb factory that blows up now and then (Bruno patches it up afterwards).
+  - Community projects that change the map: benches, a riverside park, street lamps, a fishing pier, a museum, a bomb factory that blows up now and then (Bruno patches it up afterwards), and an AI data center run on three fixed bikes: villagers (and Claude, with `pedal`) keep its battery up, a charged one is kind and computes Bells and apples, and one that runs flat turns evil and blows up the bomb factory.
   - A walkable museum with a curator owl, plus bug catching, digging for fossils, fish records, letters by mail and villager requests.
 - **It notices your real work**:
   - While Claude Code runs tools in your session, the village Claude hammers, reads or stokes a forge to match.

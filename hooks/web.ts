@@ -2,7 +2,7 @@
 // Pure logic, no `$`: register.tsx posts these to the local server that web/server.mjs runs.
 
 import { BUGS, MUSEUM, MUSEUM_REWARD, PROJECTS } from './catalog'
-import { active, clock, eventLabels, H, projectIds, season, seasonDay, VILLAGERS, W } from './game'
+import { active, clock, dcMood, eventLabels, H, projectIds, season, seasonDay, VILLAGERS, W } from './game'
 import type { LogLine } from '../types'
 import type { World } from './game'
 import { caseAt, HALL_TITLES, IH, interiorTile, IW } from './museum'
@@ -107,6 +107,7 @@ export function statePayload(w: World, log: readonly LogLine[]) {
     meteor: !!active(w, 'meteor'),
     club: w.adults && w.projects.club.done,
     factory: w.projects.factory.done ? { boom: w.boom, rubble: w.rubble > 0 } : null,
+    datacenter: w.projects.datacenter.done ? { battery: Math.round(w.dc.battery), mood: dcMood(w) } : null,
     inv: Object.entries(w.inv).filter(([, n]) => n > 0),
     movers,
     critters: museum ? [] : w.critters.map(c => ({ x: c.x, y: c.y, kind: c.kind, color: hex(c.color), flies: !!BUGS[c.kind]?.flies })),
@@ -133,7 +134,8 @@ export function infoPayload(w: World) {
     const items = Object.entries(def.items).map(([name, need]) => ({ name, have: Math.min(need, st.items[name] ?? 0), need }))
     const have = st.bells + Object.values(st.items).reduce((a, b) => a + b, 0) * 100
     const total = def.bells + Object.values(def.items).reduce((a, b) => a + b, 0) * 100
-    return { name: def.name, about: def.about, done: !!st.done, bells: st.bells, need: def.bells, items, pct: st.done ? 1 : Math.min(1, have / Math.max(1, total)) }
+    const about = id === 'datacenter' && st.done ? `${def.about} - right now it is ${dcMood(w)}` : def.about
+    return { name: def.name, about, done: !!st.done, bells: st.bells, need: def.bells, items, pct: st.done ? 1 : Math.min(1, have / Math.max(1, total)) }
   })
   const donated = new Set(w.museum)
   const sections = Object.entries(MUSEUM).map(([name, pieces]) => ({

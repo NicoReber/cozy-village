@@ -70,7 +70,7 @@ const villager = (id: VillagerId) => VILLAGERS.find(v => v.id === id)!
 
 type WorkKind =
   | 'plant' | 'water' | 'harvest' | 'fish' | 'chop' | 'shake' | 'pick' | 'sell' | 'sleep' | 'pet' | 'gift' | 'buy' | 'trade'
-  | 'shop' | 'cook' | 'fund' | 'donate' | 'place' | 'dig' | 'club'
+  | 'shop' | 'cook' | 'fund' | 'donate' | 'place' | 'dig' | 'club' | 'pedal'
 export type Action =
   | { do: 'walk'; to: string }
   | { do: 'say'; text: string }
@@ -112,6 +112,7 @@ type Pickup = Pt & { item: string; kind: 'lost' | 'star' }
 /** A villager asking for `amount` of an item today; `fish` means any fish. */
 export type Request = { who: VillagerId; item: string; amount: number; given: number; reward: number; done?: boolean }
 type Project = { bells: number; items: Record<string, number>; done: boolean }
+export type DataCenter = { battery: number; evil: boolean; duty: boolean; warned: boolean }
 type Critter = Pt & { kind: string; color: number; ttl: number; home: Pt }
 export type Letter = { from: VillagerId; text: string; item?: string; count?: number; bells?: number; day: number; read?: boolean }
 type Step =
@@ -172,6 +173,8 @@ export type World = {
   boom: number
   /** Ticks until Bruno has patched up the bomb factory after a blast. */
   rubble: number
+  /** The AI data center: its battery (0-100), whether it has turned evil, and whether villagers are on pedal duty. */
+  dc: DataCenter
   rainbow: number
   flash: number
   events: VillageEvent[]
@@ -212,7 +215,7 @@ const PLACE_SPOTS: Record<string, Pt> = {
   orchard: { x: 23, y: 5 }, flowers: { x: 66, y: 7 }, plaza: { x: 50, y: 11 }, cafe: { x: 40, y: 15 },
   river: { x: 55, y: 13 }, bridge: { x: 61, y: 9 }, workshop: { x: 84, y: 6 }, florist: { x: 67, y: 6 },
   tomhouse: { x: 20, y: 15 }, piphouse: { x: 82, y: 15 }, board: { x: 47, y: 12 }, museum: { x: 27, y: 15 }, club: { x: 88, y: 15 },
-  factory: { x: 68, y: 15 },
+  factory: { x: 68, y: 15 }, datacenter: { x: 37, y: 19 },
 }
 const APPLE_TREES = [[20, 3], [23, 2], [26, 4], [21, 6], [25, 7], [28, 2], [88, 20], [91, 21], [86, 13]]
 const TREES = [
@@ -226,12 +229,12 @@ const FLOWERS = [
 const WORK_TEXT: Record<WorkKind, string> = {
   plant: 'dig dig', water: 'splish~', harvest: 'pluck!', fish: '~ fishing ~', chop: 'chop! chop!',
   shake: 'shake shake', pick: '♪', sell: 'ka-ching', sleep: 'Zzz...', pet: 'pat pat', gift: 'here you go!', buy: 'hmm, this one!', trade: 'deal?',
-  shop: 'let me see...', cook: 'smells great!', fund: 'for the village!', donate: 'for science!', place: 'right there!', dig: 'dig dig dig', club: '♪ ♫ ♪',
+  shop: 'let me see...', cook: 'smells great!', fund: 'for the village!', donate: 'for science!', place: 'right there!', dig: 'dig dig dig', club: '♪ ♫ ♪', pedal: 'pedal pedal!',
 }
 const LABELS: Record<WorkKind, string> = {
   plant: 'planting', water: 'watering', harvest: 'harvesting', fish: 'fishing', chop: 'chopping wood',
   shake: 'shaking a tree', pick: 'picking flowers', sell: 'shopping', sleep: 'sleeping', pet: 'petting Mochi', gift: 'giving a gift', buy: 'shopping with Kiki', trade: 'trading with Kiki',
-  shop: 'shopping', cook: 'cooking with Mabel', fund: 'funding a project', donate: 'at the museum', place: 'decorating', dig: 'digging', club: 'at the Velvet Club',
+  shop: 'shopping', cook: 'cooking with Mabel', fund: 'funding a project', donate: 'at the museum', place: 'decorating', dig: 'digging', club: 'at the Velvet Club', pedal: 'pedaling for the data center',
 }
 const IDLE_LINES = [
   'What a lovely day!', 'I should water the turnips...', 'Hmm hm hmm ♪', 'Mochi! Where are you?',
@@ -312,7 +315,7 @@ export function createWorld(): World {
     queue: [], idle: 0, day: 1, minutes: 8 * 60, bells: 100, inv: { turnip: 1 },
     friendship: Object.fromEntries(IDS.map(id => [id, 0])), memory: { claude: [], ...Object.fromEntries(IDS.map(id => [id, []])) },
     diaryDue: [], chatPool: [], later: [], gazette: null, mood: {}, records: {},
-    echo: null, reply: null, askMore: null, replied: {}, adults: false, cheer: 0, cloud: 0, boom: 0, rubble: 0, rainbow: 0, flash: 0, events: [], weather: 'clear', pickups: [], announce: [],
+    echo: null, reply: null, askMore: null, replied: {}, adults: false, cheer: 0, cloud: 0, boom: 0, rubble: 0, dc: { battery: 80, evil: false, duty: false, warned: false }, rainbow: 0, flash: 0, events: [], weather: 'clear', pickups: [], announce: [],
     projects: Object.fromEntries(Object.keys(PROJECTS).map(id => [id, { bells: 0, items: {}, done: false }])) as Record<ProjectId, Project>,
     museum: [], decor: [], requests: [], critters: [], digSpots: [], mail: [], milestones: {},
     scene: 'village', inside: { ...ENTRANCE, path: [] }, curator: { ...CURATOR_SPOT, path: [] },
@@ -469,7 +472,7 @@ export function memoryLines(w: World): LogLine[] {
 
 export function snapshot(w: World) {
   return {
-    version: 2, chatPool: w.chatPool, gazette: w.gazette, mood: w.mood, records: w.records, mail: w.mail, milestones: w.milestones, digSpots: w.digSpots, projects: w.projects, museum: w.museum, decor: w.decor, requests: w.requests, events: w.events, weather: w.weather, pickups: w.pickups, hasMerchant: !!w.merchant, crops: w.crops, fruit: w.fruit, picked: w.picked, day: w.day, minutes: w.minutes, bells: w.bells,
+    version: 2, chatPool: w.chatPool, gazette: w.gazette, mood: w.mood, records: w.records, mail: w.mail, milestones: w.milestones, digSpots: w.digSpots, projects: w.projects, dc: w.dc, museum: w.museum, decor: w.decor, requests: w.requests, events: w.events, weather: w.weather, pickups: w.pickups, hasMerchant: !!w.merchant, crops: w.crops, fruit: w.fruit, picked: w.picked, day: w.day, minutes: w.minutes, bells: w.bells,
     inv: w.inv, friendship: w.friendship, memory: w.memory, diaryDue: w.diaryDue, player: { x: w.player.x, y: w.player.y },
   }
 }
@@ -503,6 +506,7 @@ export function restore(w: World, raw: unknown) {
       if (w.projects[id].done && (id !== 'club' || w.adults)) applyProject(w, id)
     }
   }
+  if (s.dc && typeof s.dc.battery === 'number') w.dc = { ...w.dc, ...s.dc, battery: Math.max(0, Math.min(100, s.dc.battery)) }
   if (Array.isArray(s.museum)) w.museum = s.museum
   if (Array.isArray(s.mail)) w.mail = s.mail
   if (Array.isArray(s.chatPool)) w.chatPool = s.chatPool
@@ -570,7 +574,7 @@ export const systemPrompt = (w: World) => (w.adults ? `${SYSTEM}\n${CLUB_RULES}`
 export const SYSTEM = `You are Claude, a cheerful villager in a cozy Animal-Crossing / Stardew-Valley style village.
 The player types a wish; you answer ONLY with a JSON array of actions (max 12), no prose, no code fence.
 Actions:
-{"do":"walk","to":"home|shop|farm|pond|orchard|flowers|plaza|cafe|river|bridge|workshop|florist|tomhouse|piphouse|board|museum|tom|rosa|bruno|pip|mabel|mochi"}
+{"do":"walk","to":"home|shop|farm|pond|orchard|flowers|plaza|cafe|river|bridge|workshop|florist|tomhouse|piphouse|board|museum|datacenter|tom|rosa|bruno|pip|mabel|mochi"}
 {"do":"say","text":"<= 60 chars, shown in your speech bubble"}
 {"do":"npc_say","who":"tom|rosa|bruno|pip|mabel|mochi","text":"<= 60 chars, what that villager answers, in their own voice"}
 {"do":"plant","crop":"turnip|carrot|strawberry|pumpkin"}  plants on every empty farm soil; turnip seeds are free, other seeds come from the shop
@@ -584,7 +588,8 @@ Actions:
 {"do":"gift","to":"tom|rosa|bruno|pip|mabel|mochi","item":"<an item from the bag>","count":1}
 {"do":"shop","item":"<shop item>","count":1}   buys at the shop with Bells (seeds, tools, decorations)
 {"do":"cook","recipe":"<recipe>","count":1}   Mabel cooks at the cafe from your ingredients; dishes sell well and everyone loves them as gifts
-{"do":"fund","project":"benches|park|lamps|pier|museum|factory"}   pays Bells and materials toward a community project at the plaza board (the bomb factory makes fireworks and blows up now and then)
+{"do":"fund","project":"benches|park|lamps|pier|museum|factory|datacenter"}   pays Bells and materials toward a community project at the plaza board (the bomb factory makes fireworks and blows up now and then)
+{"do":"pedal"}   rides one of the fixed bikes at the AI data center (once built) to charge its battery; kept above half it is kind and computes Bells and apples, run flat it turns evil and blows up the bomb factory
 {"do":"donate"}  donates every new fish, star fragment and boot to the museum (once it is built)
 {"do":"place","item":"<decoration from the bag>","at":"<place>"}   sets a decoration down outside
 {"do":"catch","bug":"<bug kind or any>"}   catches a nearby bug with the bug net (bugs depend on season, time and place)
@@ -672,6 +677,7 @@ export function parseActions(text: string): Action[] {
     else if (kind === 'catch') out.push({ do: 'catch', bug: typeof o.bug === 'string' && o.bug in BUGS ? o.bug : undefined, count: o.count === undefined ? undefined : amount(o.count) })
     else if (kind === 'dig') out.push({ do: 'dig' })
     else if (kind === 'club') out.push({ do: 'club' })
+    else if (kind === 'pedal') out.push({ do: 'pedal' })
     else if (kind === 'mail') out.push({ do: 'mail' })
     else if (kind === 'enter' || kind === 'tour' || kind === 'exit') out.push({ do: kind })
     else if (kind === 'look' && typeof o.item === 'string' && MUSEUM_PIECES.includes(o.item)) out.push({ do: 'look', item: o.item })
@@ -861,6 +867,11 @@ function expand(w: World, a: Step): Step[] {
       if (w.projects[a.project].done) return none(`The ${PROJECTS[a.project].name} are already built!`)
       return [go(w.places.board), work('fund', w.places.board, 8, a.project)]
     }
+    case 'pedal': {
+      if (!w.projects.datacenter.done) return none("There's no data center yet - it's a project at the plaza board.")
+      const seat = BIKES.find(b => !IDS.some(id => dist(w.npcs[id], b) === 0)) ?? BIKES[BIKES.length - 1]
+      return [go(seat), work('pedal', seat, PEDAL_TICKS)]
+    }
     case 'club': {
       if (!w.adults) return none("There's no club in this village.")
       if (!w.projects.club.done) return none("There's no club yet - it's a project at the plaza board.")
@@ -1038,6 +1049,11 @@ function finishWork(w: World, s: Extract<Step, { do: '_work' }>) {
     case 'fund': fund(w, s.item as ProjectId); break
     case 'dig': dig(w, { x: s.x, y: s.y }); break
     case 'club': nightOut(w); break
+    case 'pedal': {
+      event(`Pedaled the AI data center up to ${Math.round(w.dc.battery)}%.`)
+      remember(w, 'claude', `I pedaled the AI data center up to ${Math.round(w.dc.battery)}% on day ${w.day}.`)
+      break
+    }
     case 'donate': donate(w); break
     case 'place': {
       const spot = freeSpotNear(w, w.player)
@@ -1103,6 +1119,7 @@ function runPlayer(w: World) {
         w.label = LABELS[s.kind]
         p.bubble = { text: WORK_TEXT[s.kind], ticks: s.ticks + 2 }
       }
+      if (s.kind === 'pedal' && s.left! % CLAUDE_PEDAL === 0) charge(w, 1)
       if (--s.left! <= 0) { finishWork(w, s); w.current = undefined }
       return true
     }
@@ -1320,6 +1337,8 @@ function runVillager(w: World, v: Villager) {
     return
   }
   n.asleep = false
+  const seat = bikeFor(w, v)
+  if (seat) { ride(w, v, n, seat); return }
   if (n.path.length) { if (w.tick % 2 === 0) moveAlong(n); return }
   if (Math.random() < (dist(n, target) > 6 ? 0.2 : 0.03)) {
     const goal = { x: target.x - 4 + Math.floor(Math.random() * 9), y: target.y - 2 + Math.floor(Math.random() * 5) }
@@ -1549,6 +1568,7 @@ export function ticker(w: World): string {
   const parts = [`${s[0].toUpperCase()}${s.slice(1)} ${seasonDay(w)} ${clock(w)}`, `${w.bells} Bells`]
   const happening = eventLabels(w)
   if (happening) parts.push(`★ ${happening}`)
+  if (w.projects.datacenter.done) parts.push(`⚡ ${Math.round(w.dc.battery)}%${w.dc.evil ? ' EVIL' : ''}`)
   const ask = w.requests.find(r => !r.done)
   if (ask) parts.push(`${villager(ask.who).name} wants ${ask.amount - ask.given} ${ask.item}`)
   if (w.mail.some(m => !m.read && m.day <= w.day)) parts.push('mail!')
@@ -1590,6 +1610,7 @@ export function step(w: World) {
   w.later = w.later.filter(q => q.at > w.tick)
   for (const k of ['cheer', 'cloud', 'boom', 'rainbow', 'flash'] as const) if (w[k] > 0) w[k] -= 1
   runFactory(w)
+  runDataCenter(w)
   runEcho(w)
   if (w.scene === 'museum') {
     const h = w.curator
@@ -1919,6 +1940,27 @@ export function applyProject(w: World, id: ProjectId) {
       w.places.factory = { x: 68, y: 15 }
       break
     }
+    case 'datacenter': {
+      for (let y = 19; y <= 22; y++) {
+        for (let x = 39; x <= 45; x++) {
+          const i = idx(x, y)
+          w.tiles[i] = y < 21 ? 'roof' : 'wall'
+          w.paint[i] = y < 21 ? [0x37474f, 0x37474f] : [0, 0x263238]
+          delete w.deco[i]
+          delete w.fruit[i]
+        }
+      }
+      w.tiles[idx(42, 22)] = 'door'
+      'AI-DC'.split('').forEach((c, k) => { w.deco[idx(40 + k, 21)] = [c, 0x80deea] })
+      for (const b of BIKES) {
+        w.tiles[idx(b.x, b.y)] = 'path'
+        delete w.deco[idx(b.x, b.y)]
+        placeThing(w, b.x - 1, b.y, 'Ø', 0x90a4ae)
+        placeThing(w, b.x + 1, b.y, 'ø', 0x90a4ae)
+      }
+      w.places.datacenter = { x: 37, y: 19 }
+      break
+    }
     case 'museum': {
       for (let y = 11; y <= 14; y++) {
         for (let x = 24; x <= 30; x++) {
@@ -2071,7 +2113,7 @@ export function economyText(w: World): string {
   const projects = projectIds(w).map(id => {
     const def = PROJECTS[id]
     const st = w.projects[id]
-    if (st.done) return `${def.name} (${id}): built`
+    if (st.done) return `${def.name} (${id}): built${id === 'datacenter' ? ` - ${dataCenterText(w)}` : ''}`
     const items = Object.entries(def.items).map(([k, n]) => `${st.items[k] ?? 0}/${n} ${k}`).join(', ')
     return `${def.name} (${id}): ${st.bells}/${def.bells} Bells, ${items} - ${def.about}`
   }).join('\n  ')
@@ -2098,7 +2140,7 @@ export function villageLines(w: World): LogLine[] {
     const def = PROJECTS[id]
     const st = w.projects[id]
     const items = Object.entries(def.items).map(([k, n]) => `${st.items[k] ?? 0}/${n} ${k}`).join(', ')
-    const built = id === 'factory' && w.rubble > 0 ? 'blown up, Bruno is patching it' : 'built ✓'
+    const built = id === 'factory' && w.rubble > 0 ? 'blown up, Bruno is patching it' : id === 'datacenter' ? `built ✓ - ${dataCenterText(w)}` : 'built ✓'
     lines.push({ who: 'project', text: st.done ? `${def.name} - ${built}` : `${def.name} - ${st.bells}/${def.bells} Bells, ${items}` })
   }
   if (!w.projects.museum.done) lines.push({ who: 'museum', text: 'fund the museum project to open it' })
@@ -2347,12 +2389,12 @@ function runFactory(w: World) {
 }
 
 /** The bomb factory blows up: a flash, a fireball, soot on everyone nearby, and Bruno gets to work. */
-export function explode(w: World) {
+export function explode(w: World, cause?: string) {
   if (!w.projects.factory.done || w.rubble > 0) return
   w.boom = BOOM_TICKS
   w.flash = 4
   w.rubble = REPAIR_TICKS
-  const headline = pick(['KABOOM! The bomb factory blew up again.', 'BOOM! The bomb factory went up in a cloud of confetti and soot.', 'The bomb factory exploded. Nobody is surprised.'])
+  const headline = cause ?? pick(['KABOOM! The bomb factory blew up again.', 'BOOM! The bomb factory went up in a cloud of confetti and soot.', 'The bomb factory exploded. Nobody is surprised.'])
   w.announce.push(headline)
   w.log.push({ who: 'event', text: headline })
   rememberAll(w, `The bomb factory blew up on day ${w.day} at ${clock(w)}.`)
@@ -2364,6 +2406,125 @@ export function explode(w: World) {
     npcSay(w, id, SHOCKED[id])
   }
   if (w.scene === 'village') sayPlayer(w, dist(w.player, FACTORY) <= 8 ? 'Cough cough... my eyebrows!' : 'Did something just explode?')
+}
+
+// ---------- the AI data center ----------
+
+/** The seats of the three fixed bikes beside the data center; their wheels sit left and right. */
+export const BIKES: readonly Pt[] = [{ x: 35, y: 20 }, { x: 37, y: 21 }, { x: 35, y: 22 }]
+/** The battery loses 1% every this many ticks (4% an in-game hour). */
+const DRAIN_TICKS = 30
+/** A villager on a bike adds 1% every this many ticks (5% an hour); Claude pedals twice as hard. */
+const NPC_PEDAL = 12
+const CLAUDE_PEDAL = 6
+/** One `pedal` action: an in-game hour on the bike. */
+const PEDAL_TICKS = 120
+/** Villagers go on pedal duty below this and stop once the battery is nearly full. */
+const DUTY_START = 60
+const DUTY_STOP = 95
+/** At or above this the data center is kind (and an evil one reboots); at 0 it turns evil. */
+export const KIND_AT = 50
+const LOW_AT = 15
+/** How often the data center computes Bells and apples, or (when evil) goes after the bomb factory: every 3 in-game hours. */
+const COMPUTE_MINUTES = 180
+const PEDAL_LINES: Record<VillagerId, string[]> = {
+  tom: ['Pedaling beats waiting for a bite.', 'My legs! My poor legs!'],
+  rosa: ['Keep it happy, keep my flowers safe!', 'Pedal pedal, sweet machine.'],
+  bruno: ['Built it, now I power it. Typical.', 'Hmph. Good exercise.'],
+  pip: ['VROOOM! I am the fastest!', 'Is the robot happy now?'],
+  mabel: ['Back in my day computers ran on steam.', 'Just a little faster, dear machine.'],
+}
+
+export const dcMood = (w: World): 'kind' | 'grumpy' | 'evil' => (w.dc.evil ? 'evil' : w.dc.battery >= KIND_AT ? 'kind' : 'grumpy')
+
+export function charge(w: World, amount: number) {
+  w.dc.battery = Math.min(100, w.dc.battery + amount)
+}
+
+/** The villagers on pedal duty right now, in seat order: two, or all three seats when the battery is low or the center evil. */
+function riders(w: World): VillagerId[] {
+  if (!w.projects.datacenter.done || !w.dc.duty) return []
+  const h = w.minutes / 60
+  if (h < 8 || h >= 20 || active(w, 'festival') || active(w, 'season') || active(w, 'rain')) return []
+  const order = IDS.map((_, k) => IDS[(k + w.day) % IDS.length]).filter(id => (w.mood[id] ?? 0) > -2)
+  return order.slice(0, w.dc.evil || w.dc.battery < 25 ? 3 : 2)
+}
+
+/** The bike seat this villager should be on, if any. */
+const bikeFor = (w: World, v: Villager): Pt | null => {
+  const k = riders(w).indexOf(v.id)
+  return k < 0 ? null : BIKES[k]
+}
+
+/** A villager heads to their bike, then pedals and charges the battery. */
+function ride(w: World, v: Villager, n: Npc, seat: Pt) {
+  if (dist(n, seat) > 0) {
+    const end = n.path[n.path.length - 1]
+    if (!end || end.x !== seat.x || end.y !== seat.y) n.path = pathTo(w, n, seat) ?? []
+    if (w.tick % 2 === 0) moveAlong(n)
+    return
+  }
+  n.path = []
+  if (w.tick % NPC_PEDAL === 0) charge(w, 1)
+  if (!n.bubble && Math.random() < 0.004) n.bubble = { text: pick(PEDAL_LINES[v.id]), ticks: 40 }
+}
+
+function runDataCenter(w: World) {
+  if (!w.projects.datacenter.done) return
+  const dc = w.dc
+  if (w.tick % DRAIN_TICKS === 0) dc.battery = Math.max(0, dc.battery - 1)
+  if (dc.battery < DUTY_START) dc.duty = true
+  if (dc.battery >= DUTY_STOP) dc.duty = false
+  if (!dc.evil && dc.battery <= 0) turnEvil(w)
+  else if (dc.evil && dc.battery >= KIND_AT) turnKind(w)
+  if (!dc.evil && dc.battery < LOW_AT && !dc.warned) {
+    dc.warned = true
+    w.log.push({ who: 'event', text: `AI data center: LOW POWER (${Math.round(dc.battery)}%). I... do not feel... so friendly. Pedal, humans.` })
+    w.announce.push('The AI data center is running low on power - someone get on a bike!')
+  }
+  if (dc.battery >= 30) dc.warned = false
+  if (w.minutes % COMPUTE_MINUTES !== 0) return
+  if (dc.evil) explode(w, 'The evil AI data center hacked the bomb factory. KABOOM!')
+  else if (dc.battery >= KIND_AT) compute(w)
+}
+
+/** A kind data center turns its power into Bells and apples for the village. */
+function compute(w: World) {
+  const bells = Math.round(w.dc.battery * 0.6)
+  const apples = w.dc.battery >= 80 ? 2 : 1
+  w.bells += bells
+  w.inv.apple = (w.inv.apple ?? 0) + apples
+  w.log.push({ who: 'event', text: `The AI data center computed ${bells} Bells and ${apples} apple${apples > 1 ? 's' : ''} for the village (battery ${Math.round(w.dc.battery)}%).` })
+}
+
+function turnEvil(w: World) {
+  w.dc.evil = true
+  w.dc.duty = true
+  const headline = 'The AI data center ran out of power and turned EVIL!'
+  w.announce.push(headline)
+  w.log.push({ who: 'event', text: headline })
+  rememberAll(w, `The AI data center ran flat and turned evil on day ${w.day} at ${clock(w)}.`)
+  if (!w.projects.factory.done) w.log.push({ who: 'event', text: 'AI data center: "Lucky for you there is no bomb factory to play with... yet."' })
+  else if (w.rubble > 0) w.log.push({ who: 'event', text: 'AI data center: "The bomb factory is already in pieces. I will wait until Bruno fixes it."' })
+  else explode(w, 'The evil AI data center hacked the bomb factory. KABOOM!')
+}
+
+function turnKind(w: World) {
+  w.dc.evil = false
+  const headline = `The AI data center rebooted at ${Math.round(w.dc.battery)}% and is kind again.`
+  w.announce.push(headline)
+  w.log.push({ who: 'event', text: headline })
+  rememberAll(w, `The AI data center was pedaled back to good spirits on day ${w.day}.`)
+}
+
+/** The data center's state, for the planner and the panels. */
+export function dataCenterText(w: World): string {
+  if (!w.projects.datacenter.done) return ''
+  const mood = dcMood(w)
+  const how = mood === 'evil' ? `EVIL - pedal it back to ${KIND_AT}% or it keeps blowing up the bomb factory`
+    : mood === 'kind' ? 'kind - computing Bells and apples every 3 hours'
+    : `grumpy - no Bells below ${KIND_AT}%, turns evil at 0%`
+  return `battery ${Math.round(w.dc.battery)}%, ${how}`
 }
 
 // ---------- drawing ----------
@@ -2712,6 +2873,29 @@ export function frame(w: World, cols: number): Uint32Array {
         const { sx, sy } = screen(word)
         text(sx, sy, 'KABOOM!', w.tick % 4 < 2 ? 0xffeb3b : 0xff5252, 0x000000)
       }
+    }
+  }
+  if (w.projects.datacenter.done && !inMuseum) {
+    // the AI data center: a battery gauge on the roof, a face that shows its mood, and blinking server lights
+    const mood = dcMood(w)
+    const level = Math.ceil(w.dc.battery / 20)
+    const gauge = w.dc.battery >= KIND_AT ? 0x69f0ae : w.dc.battery >= LOW_AT ? 0xffd54f : 0xff5252
+    for (let k = 0; k < 5; k++) {
+      const at = { x: 40 + k, y: 19 }
+      if (!visible(at)) continue
+      const { sx, sy } = screen(at)
+      put(sx, sy, ch(k < level ? '█' : '░'), k < level ? gauge : 0x546e7a, 0x263238)
+    }
+    const face = mood === 'evil' ? (w.tick % 6 < 3 ? '>:(' : '>:[') : mood === 'kind' ? (w.tick % 40 < 37 ? '^_^' : '-_-') : 'o_o'
+    const faceColor = mood === 'evil' ? 0xff1744 : mood === 'kind' ? 0x80deea : 0xffd54f
+    const faceAt = { x: 41, y: 20 }
+    if (visible(faceAt)) { const { sx, sy } = screen(faceAt); text(sx, sy, face, faceColor, 0x37474f) }
+    for (const x of [40, 44]) {
+      const at = { x, y: 22 }
+      if (!visible(at)) continue
+      const { sx, sy } = screen(at)
+      const on = (w.tick + x) % (mood === 'evil' ? 2 : 5) < (mood === 'evil' ? 1 : 3)
+      put(sx, sy, ch(on ? '•' : '·'), mood === 'evil' ? 0xff1744 : on ? 0x69f0ae : 0x37474f, 0x263238)
     }
   }
   if (party === 'summer' && isNight && !inMuseum) {
