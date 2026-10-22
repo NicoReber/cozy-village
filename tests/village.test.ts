@@ -1,10 +1,11 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
+import type { TestBody } from 'claude-code/testing'
 
 import {
   answerMore, applyDiary, applyProject, BIKES, charge, chooseReply, createWorld, diaryPrompt, echoTests, echoTool, echoTurn, encode, enqueue, explode, frame, KIND_AT, parseActions, offerReplies, remember, postcard, restore, ROWS, snapshot, step, summary, systemPrompt, ticker, VILLAGERS,
 } from '../hooks/game'
 import {
-  act, bye, createHost, finishJob, forget, hello, LEASE_MS, memoryReport, pane, saveOf, SESSION_STALE_MS, sessionEvent, takeJob, takePostcard, tickHost, WISH_WAIT_MS,
+  act, api, bye, createHost, finishJob, forget, hello, LEASE_MS, memoryReport, pane, saveOf, SESSION_STALE_MS, sessionEvent, takeJob, takePostcard, tickHost, WISH_WAIT_MS,
 } from '../hooks/host'
 import { CHORES, mapPayload, statePayload } from '../hooks/web'
 
@@ -14,6 +15,27 @@ const PANE = {
   requestId: 'cozy-village',
   props: { title: 'Village', isFocused: true, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 34 }, view: {} },
 } as const
+
+/**
+ * The shared village server in memory: server.json points at it and every fetch of the session reaches a
+ * Host through the same API web/server.mjs answers with.
+ */
+function villageServer(on: Parameters<TestBody>[1]) {
+  const h = createHost(undefined)
+  mock.env(on, { HOME: '/home/villager' })
+  on('fs.read', async (_, e, next) => (/cozy-village[\\/]server\.json$/.test(e.path) ? { value: JSON.stringify({ port: 4850, token: 'k', pid: 1 }) } : next(e)))
+  on('fs.exists', async (_, e, next) => (/cozy-village[\\/]world\.json$/.test(e.path) ? { value: true } : next(e)))
+  on('process.run', async (_, e, next) => (e.argv[0] === 'git' ? { value: { exitCode: 0, stdout: 'main\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } : next(e)))
+  on('http.fetch', async (_, e) => {
+    const url = new URL(e.url)
+    const answer = url.pathname === '/api/ping'
+      ? { status: 200, json: {} }
+      : api(h, { method: e.init?.method ?? 'GET', path: url.pathname, query: name => url.searchParams.get(name), body: e.init?.body ? JSON.parse(e.init.body) : undefined }, 0)
+    const status = answer?.status ?? 404
+    return { value: { status, ok: status < 300, headers: {}, text: answer?.json === undefined ? '' : JSON.stringify(answer.json) } }
+  })
+  return h
+}
 
 const run = (w: ReturnType<typeof createWorld>, max: number) => {
   for (let i = 0; i < max && (w.queue.length || w.current); i++) step(w)
@@ -70,7 +92,8 @@ test('a finished day turns into diaries and facts, and memory survives a save', 
   expect(again.memory.tom.some(m => m.text === 'That koi!')).toBe(true)
 })
 
-test('the pane draws, a wish reaches the agent with its memory', async ($, on) => {
+test('the pane draws the shared village, a wish reaches this session\'s model with its memory', async ($, on) => {
+  const h = villageServer(on)
   const asked: string[] = []
   on('model.complete', async (_, e) => {
     asked.push(e.prompt)
@@ -91,11 +114,14 @@ test('the pane draws, a wish reaches the agent with its memory', async ($, on) =
     expect(await ui.find({ key: 'panel-village' })).toBeDefined()
     await ui.press({ key: 'tab-chat' })
     await ui.input({ key: 'wish', text: 'visit Mabel' })
+    await ui.press({ key: 'quick-fish' })
     await ui.unmount()
   }
   expect(asked.length).toBe(2)
   expect(asked[1]).toContain('The player asked me: "visit Mabel"')
   expect(asked[1]).toContain('### Mabel')
+  expect(h.jobs.length).toBe(0)
+  expect(h.world.queue.length + (h.world.current ? 1 : 0)).toBe(1)
 })
 
 test('every day brings at least one event that starts in daylight', async () => {
@@ -477,7 +503,8 @@ test('a speech bubble stays where it first appeared, even when space frees up', 
   expect(find('Claude')).not.toBe(null)
 })
 
-test('the desktop pane points to the browser view and keeps the chat and the wish field', async $ => {
+test('the desktop pane points to the shared village\'s browser view and keeps the chat and the wish field', async ($, on) => {
+  villageServer(on)
   for (const surface of ['desktop', 'mobile'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
     expect(await ui.find({ text: /lives in your browser/ })).toBeDefined()
@@ -659,7 +686,7 @@ test('a wish no session takes is dropped, a failed one gets a foggy answer', asy
 
 test('the shared village queues one diary job per finished day and keeps its save', async () => {
   const h = createHost(undefined)
-  h.world.memory.tom = [{ day: 1, text: 'Caught a big bass.', kind: 'event' }]
+  h.world.memory.tom = [{ day: 1, time: '08:00', text: 'Caught a big bass.', kind: 'event' }]
   h.world.diaryDue = [1]
   tickHost(h, 0)
   tickHost(h, 0)
@@ -703,7 +730,7 @@ test('a pane gets the picture, the chat and only the headlines it has not seen',
   const first = pane(h, 60, 0, true)
   expect(first.cols).toBe(60)
   expect(first.cells).toBe(encode(frame(h.world, 60)))
-  expect(first.announce).toEqual(['Tests passed!'])
+  expect(first.announce).toContain('Tests passed!')
   expect(first.info?.people.length).toBe(VILLAGERS.length + 1)
   const second = pane(h, 999, first.seq, false)
   expect(second.cols).toBe(80)

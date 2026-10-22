@@ -26,8 +26,9 @@ You steer it by typing wishes like *"buy pumpkin seeds and plant them"* or *"bri
   - Crops and seeds, cooking at the café, decorations.
   - Community projects that change the map: benches, a riverside park, street lamps, a fishing pier, a museum, a bomb factory that blows up now and then (Bruno patches it up afterwards), and an AI data center run on three fixed bikes: villagers (and Claude, with `pedal`) keep its battery up, a charged one is kind and computes Bells and apples, and one that runs flat turns evil and blows up the bomb factory.
   - A walkable museum with a curator owl, plus bug catching, digging for fossils, fish records, letters by mail and villager requests.
+- **One village for all your sessions**: every Claude Code session on the computer joins the same village, whether its pane is open or not.
 - **It notices your real work**:
-  - While Claude Code runs tools in your session, the village Claude hammers, reads or stokes a forge to match.
+  - While Claude Code runs tools in any of your sessions, the village Claude hammers, reads or stokes a forge to match.
   - Finished turns get a cheer, passing tests a rainbow, failing tests a little rain cloud.
 - **Postcards**: one click copies the current scene plus a caption to the clipboard.
 
@@ -45,12 +46,12 @@ browser instead, as a pixel-art canvas game:
 In the desktop app, `/village` shows the village's link with **Open in my browser** and **Copy link**. To keep it inside
 the app, open the link in the desktop app's Browser pane (Ctrl+Shift+B on Windows, Cmd+Shift+B on macOS). In any
 session, `/village web` opens it in your browser.
-The page is served by a small local server (`web/server.mjs`) that the mod starts for the session and stops with it.
-It listens on this computer's loopback address only, and the link carries a random key for that session.
+The page is served by the village's local server (`web/server.mjs`), the same one every session connects to.
+It listens on this computer's loopback address only, and the link carries a random key for that server.
 
 ## Requirements
 
-Claude Code with function-hook plugins (mods). In the terminal the village is drawn in character cells and looks best in the fullscreen layout. The browser view needs [Node.js](https://nodejs.org) 22.18 or newer on the computer (it runs the game's TypeScript directly).
+Claude Code with function-hook plugins (mods), and [Node.js](https://nodejs.org) 22.18 or newer on the computer: the village runs in a small local Node server that runs the game's TypeScript directly. In the terminal the village is drawn in character cells and looks best in the fullscreen layout.
 
 ## Install
 
@@ -85,7 +86,7 @@ To load it in every session without installing, set `CLAUDE_CODE_PLUGIN_DIRS` to
 | **Museum tour** | Walk through the museum once it is built |
 | **Village info** (browser) | Requests, project progress, museum collection and memories |
 | **Open in my browser** | Desktop app: opens the browser view (`/village web` anywhere) |
-| `/village stop` | Stops the village and its browser server; it keeps running until you do, even if you close the pane |
+| `/village stop` | Stops the village server for every session; it keeps running until you do (or until no session has been open for five minutes), even if you close the pane |
 | `/village memory` | Prints every character's memory |
 | `/village forget` | Wipes all memories and friendships |
 
@@ -109,11 +110,15 @@ The village calls the chosen model:
 - once per wish (the planning prompt is about 3–5k tokens)
 - once per in-game day for diaries, gossip, letters and the Gazette (a game day is about seven real minutes)
 
-Nothing else talks to a model.
+The village server cannot call a model itself, so one of the open sessions makes each call, with that session's model
+setting; a wish is answered by the session it was typed in. Nothing else talks to a model.
 
 ## Your save
 
-The village is saved through Claude Code's plugin store. Saving happens every in-game hour, and the save carries over between sessions.
+The village server saves the world to `cozy-village/world.json` in your Claude config folder (`~/.claude` unless
+`CLAUDE_CONFIG_DIR` says otherwise) every in-game hour and when it stops, and the save carries over between sessions.
+A save from an earlier version, kept in Claude Code's plugin store, moves there the first time the server starts.
+Next to it, `server.json` tells the sessions where the running server is.
 
 ## Development
 
@@ -126,7 +131,8 @@ hooks/
   web.ts         what the browser view is sent: the map and the moving parts
   host.ts        the shared village the server runs: sessions, panes and the model jobs it hands out
 types/index.d.ts the plugin's state contract
-web/             the browser view: server.mjs (local server), index.html and village.js (canvas renderer)
+web/             server.mjs (the village server every session connects to), launch.mjs (starts it detached),
+                 index.html and village.js (the browser view's canvas renderer)
 tests/           claude plugin test suite
 tools/           scene scripts and renderers for docs/village.gif and docs/browser.gif
 ```

@@ -5,11 +5,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 ### Added
-- The browser server can run the village itself (`node web/server.mjs --world`): one world with its own save file, ready for every session to connect to. Wishes and diaries wait as jobs for a session to run the model call.
-- The world-mode server's session API: sessions find it through `server.json`, say hello and goodbye, report tool calls, turns and test runs, poll the pane's picture, chat and headlines, and take and answer the model jobs. Only one server runs at a time, and it saves and stops once no session has been around for five minutes.
+- **One village for all your sessions.** The village now runs in one local server (`web/server.mjs`) that every Claude Code session on the computer joins, pane or not: each reports its tool calls, finished turns and test runs, and the village reacts to all of them. Two open sessions no longer overwrite each other's save.
+- The model calls the village needs are run by the open sessions, a wish by the session it was typed in.
 
 ### Changed
-- The browser view needs Node.js 22.18 or newer.
+- The village needs Node.js 22.18 or newer, in the terminal too.
+- The save moves from the plugin store to `cozy-village/world.json` in the Claude config folder, by itself on the first start.
+- `/village stop` stops the village for every session; the server also stops by itself five minutes after the last session.
 
 ## [0.6.0] - 2026-10-21
 ### Added

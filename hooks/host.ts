@@ -11,10 +11,14 @@ import {
 import type { World } from './game'
 import { CHORES, infoPayload } from './web'
 
-/** A model call the village waits for; `system` and `prompt` go to the model as they are. */
-export type Job = { id: number; kind: 'wish' | 'diary'; system: string; prompt: string; maxTokens: number; day?: number; at: number }
-/** What a pane or a browser asks the village for. */
-export type HostAction = { kind?: unknown; text?: unknown; key?: unknown }
+/**
+ * A model call the village waits for; `system` and `prompt` go to the model as they are. A wish typed in a
+ * session's pane is `for` that session, so its own model setting answers it; any session takes it once that
+ * one is gone.
+ */
+export type Job = { id: number; kind: 'wish' | 'diary'; system: string; prompt: string; maxTokens: number; day?: number; at: number; for?: string }
+/** What a pane or a browser asks the village for; `session` names the pane's session. */
+export type HostAction = { kind?: unknown; text?: unknown; key?: unknown; session?: unknown }
 /** A Claude Code session connected to the village, and what its real work is doing. */
 export type Session = { id: string; repo: string; branch: string; since: number; seen: number; status: 'idle' | 'working'; tool: string }
 /** What a session reports: a tool call starting, a turn ending, a test or build run finishing. */
@@ -88,7 +92,8 @@ export function act(h: Host, a: HostAction, now: number) {
     w.log.push({ who: 'you', text })
     heardWish(w, text)
     w.thinking = true
-    h.jobs.push({ id: h.nextId++, kind: 'wish', system: systemPrompt(w), prompt: summary(w, text), maxTokens: 1200, at: now })
+    const session = typeof a.session === 'string' && h.sessions.has(a.session) ? a.session : undefined
+    h.jobs.push({ id: h.nextId++, kind: 'wish', system: systemPrompt(w), prompt: summary(w, text), maxTokens: 1200, at: now, for: session })
   } else if (a.kind === 'chore' && typeof a.key === 'string' && Object.hasOwn(CHORES, a.key)) {
     enqueue(w, CHORES[a.key].plan as Parameters<typeof enqueue>[1])
   } else if (a.kind === 'museum' && w.projects.museum.done) {
@@ -96,9 +101,10 @@ export function act(h: Host, a: HostAction, now: number) {
   }
 }
 
-/** Hands the oldest waiting job to a session, or one whose session never answered; null when none waits. */
-export function takeJob(h: Host, now: number): Job | null {
-  const job = h.jobs.find(j => !h.taken.has(j.id) || now - (h.taken.get(j.id) ?? 0) > LEASE_MS)
+/** Hands `session` the oldest job waiting for it, or one whose taker never answered; null when none waits. */
+export function takeJob(h: Host, now: number, session?: string): Job | null {
+  const job = h.jobs.find(j => (!h.taken.has(j.id) || now - (h.taken.get(j.id) ?? 0) > LEASE_MS)
+    && (!j.for || j.for === session || !h.sessions.has(j.for)))
   if (!job) return null
   h.taken.set(job.id, now)
   return job
@@ -170,13 +176,13 @@ export function sessionEvent(h: Host, id: string, e: SessionEvent, now: number) 
 
 // ---------- what panes show ----------
 
-/** The pane's picture at `cols` wide, its chat, and the headlines after `since`; the tab panels with `info`. */
-export function pane(h: Host, cols: number, since: number, info: boolean) {
+/** The pane's picture at `cols` wide (empty without `cells`), its chat, the headlines after `since`; the tab panels with `info`. */
+export function pane(h: Host, cols: number, since: number, info: boolean, cells = true) {
   const w = h.world
   const width = Math.max(24, Math.min(MAX_VIEW, Math.floor(cols) || MAX_VIEW))
   return {
     cols: width,
-    cells: encode(frame(w, width)),
+    cells: cells ? encode(frame(w, width)) : '',
     chat: h.chat,
     thinking: w.thinking,
     scene: w.scene,
@@ -209,4 +215,57 @@ export function forget(h: Host) {
   h.world.diaryDue = []
   for (const j of h.jobs.filter(j => j.kind === 'diary')) h.taken.delete(j.id)
   h.jobs = h.jobs.filter(j => j.kind !== 'diary')
+}
+
+// ---------- the sessions' API ----------
+
+/** One request to the village's API, as web/server.mjs hands it over (the token already checked). */
+export type ApiRequest = { method: string; path: string; query: (name: string) => string | null; body: unknown }
+/** The answer: a status and maybe a JSON body; `save` when the world must be saved right away. */
+export type ApiAnswer = { status: number; json?: unknown; save?: boolean }
+
+/** The session a request comes from, by its `session` field or parameter; empty when it names none. */
+const sessionOf = (v: unknown) => (typeof v === 'string' ? v.slice(0, 80) : '')
+const field = (body: unknown, key: string): unknown => (body && typeof body === 'object' ? (body as Record<string, unknown>)[key] : undefined)
+
+/** Answers a request to the API; null for a path it does not know. */
+export function api(h: Host, r: ApiRequest, now: number): ApiAnswer | null {
+  const { method, path, query, body } = r
+  if (method === 'POST' && path === '/api/do') {
+    if (!body || typeof body !== 'object') return { status: 400 }
+    act(h, body as HostAction, now)
+    return { status: 204 }
+  }
+  if (method === 'POST' && (path === '/api/hello' || path === '/api/bye' || path === '/api/event')) {
+    const id = sessionOf(field(body, 'session'))
+    if (!id) return { status: 400 }
+    if (path === '/api/hello') return { status: 200, json: { isNew: hello(h, id, { repo: field(body, 'repo'), branch: field(body, 'branch') }, now) } }
+    if (path === '/api/bye') bye(h, id)
+    else sessionEvent(h, id, body as SessionEvent, now)
+    return { status: 204 }
+  }
+  const session = sessionOf(query('session'))
+  if (method === 'GET' && path === '/api/pane') {
+    if (session) hello(h, session, {}, now)
+    return { status: 200, json: pane(h, Number(query('cols')), Number(query('since')) || 0, query('info') === '1', query('cells') !== '0') }
+  }
+  if (method === 'GET' && path === '/api/postcard') return { status: 200, json: { text: takePostcard(h, Number(query('cols'))) } }
+  if (method === 'GET' && path === '/api/memory') return { status: 200, json: { text: memoryReport(h) } }
+  if (method === 'POST' && path === '/api/forget') {
+    forget(h)
+    return { status: 204, save: true }
+  }
+  if (method === 'GET' && path === '/api/jobs') {
+    if (session) hello(h, session, {}, now)
+    const job = takeJob(h, now, session || undefined)
+    return job ? { status: 200, json: job } : { status: 204 }
+  }
+  const answer = /^\/api\/jobs\/(\d+)$/.exec(path)
+  if (method === 'POST' && answer) {
+    const text = field(body, 'text')
+    const reason = field(body, 'reason')
+    const known = finishJob(h, Number(answer[1]), typeof text === 'string' ? text : null, typeof reason === 'string' ? reason.slice(0, 200) : undefined)
+    return { status: known ? 204 : 404 }
+  }
+  return null
 }

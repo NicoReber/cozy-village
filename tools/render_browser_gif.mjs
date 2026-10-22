@@ -1,15 +1,17 @@
 // Renders docs/browser.gif: films the real browser view while it replays the scripted scenes in tools/browser_scene.ts.
 //
-// Copies the scene script into tests/ for one run of `claude plugin test`, starts web/server.mjs, opens the page in
-// headless Chrome, posts the recorded ticks at the game's pace and screenshots the page over the DevTools protocol,
-// then hands the frames to Python with Pillow to write the GIF. Run from the repository root:
+// Copies the scene script into tests/ for one run of `claude plugin test`, serves the browser view from a small replay
+// server of its own (the page and its /events stream, as web/server.mjs serves them), opens the page in headless
+// Chrome, sends the recorded ticks at the game's pace and screenshots the page over the DevTools protocol, then hands
+// the frames to Python with Pillow to write the GIF. Run from the repository root:
 //
 //     node tools/render_browser_gif.mjs
 //
 // Needs Node 22+, Chrome (CHROME to point elsewhere) and Python with Pillow.
 
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -53,11 +55,31 @@ for (const line of output.split(/\r?\n/)) {
 if (!ticks.length) throw new Error('the scene script printed no ticks')
 console.log(`${ticks.length} ticks recorded`)
 
-// 2. the server and the browser
+// 2. the replay server and the browser
 const token = 'gif'
-const server = spawn(process.execPath, [join(ROOT, 'web', 'server.mjs')], { env: { ...process.env, VILLAGE_TOKEN: token, VILLAGE_PORT: String(PORT) }, stdio: ['ignore', 'pipe', 'inherit'] })
-await new Promise(resolve => server.stdout.on('data', d => { if (String(d).includes('LISTENING')) resolve() }))
-const post = body => fetch(`http://127.0.0.1:${PORT}/api/state`, { method: 'POST', headers: { 'x-village-token': token }, body })
+const PAGES = { '/': ['index.html', 'text/html; charset=utf-8'], '/village.js': ['village.js', 'text/javascript; charset=utf-8'] }
+const streams = new Set()
+const last = {}
+const server = createServer((req, res) => {
+  const url = new URL(req.url ?? '/', 'http://localhost')
+  const page = PAGES[url.pathname]
+  if (page) return res.writeHead(200, { 'content-type': page[1] }).end(readFileSync(join(ROOT, 'web', page[0])))
+  if (url.pathname !== '/events') return res.writeHead(404).end()
+  res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' })
+  for (const [event, data] of Object.entries(last)) res.write(`event: ${event}\ndata: ${data}\n\n`)
+  streams.add(res)
+  req.on('close', () => streams.delete(res))
+})
+await new Promise(resolve => server.listen(PORT, '127.0.0.1', resolve))
+/** Sends one recorded tick (its state, and its map and info when they changed) to the page. */
+const post = async body => {
+  const tick = JSON.parse(body)
+  for (const event of ['map', 'info', 'state']) {
+    if (!tick[event]) continue
+    last[event] = JSON.stringify(tick[event])
+    for (const res of streams) res.write(`event: ${event}\ndata: ${last[event]}\n\n`)
+  }
+}
 await post(ticks[0].body)
 
 const profile = mkdtempSync(join(tmpdir(), 'village-gif-'))
@@ -77,7 +99,7 @@ ws.addEventListener('message', e => {
 })
 const cdp = (method, params = {}) => new Promise(resolve => { const id = nextId++; pending.set(id, resolve); ws.send(JSON.stringify({ id, method, params })) })
 await cdp('Emulation.setDeviceMetricsOverride', { width: WIDTH, height: HEIGHT, deviceScaleFactor: 1, mobile: false })
-await cdp('Page.navigate', { url: `http://localhost:${PORT}/?k=${token}` })
+await cdp('Page.navigate', { url: `http://127.0.0.1:${PORT}/?k=${token}` })
 for (let i = 0; i < 6; i++) { await post(ticks[0].body); await sleep(TICK_MS) }
 
 // 3. film: post each tick at the game's pace, screenshot in between
@@ -107,7 +129,8 @@ for (const [k, tick] of ticks.entries()) {
 }
 ws.close()
 chrome.kill()
-server.kill()
+server.closeAllConnections()
+server.close()
 console.log(`${n} frames filmed`)
 
 // 4. the GIF

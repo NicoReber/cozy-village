@@ -3,7 +3,7 @@
 
 import { BUGS, MUSEUM, MUSEUM_REWARD, PROJECTS } from './catalog'
 import { active, clock, dcMood, eventLabels, H, projectIds, season, seasonDay, VILLAGERS, W } from './game'
-import type { LogLine } from '../types'
+import type { Info, LogLine } from '../types'
 import type { World } from './game'
 import { caseAt, HALL_TITLES, IH, interiorTile, IW } from './museum'
 
@@ -127,7 +127,7 @@ export function statePayload(w: World, log: readonly LogLine[]) {
 }
 
 /** What the pane's Village and Memories tabs show, for the browser's side panel: sent when it changes, not every tick. */
-export function infoPayload(w: World) {
+export function infoPayload(w: World): Info {
   const projects = projectIds(w).map(id => {
     const def = PROJECTS[id]
     const st = w.projects[id]
