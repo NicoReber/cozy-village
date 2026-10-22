@@ -4,10 +4,13 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
+
+## [0.7.0] - 2026-10-22
 ### Added
 - **One village for all your sessions.** The village now runs in one local server (`web/server.mjs`) that every Claude Code session on the computer joins, pane or not: each reports its tool calls, finished turns and test runs, and the village reacts to all of them. Two open sessions no longer overwrite each other's save.
 - The model calls the village needs are run by the open sessions, a wish by the session it was typed in.
 - **The office**, north of the plaza: a desk and an apprentice for every open session, who mirrors that session's work (reading, editing, running commands, searching, finished turns, errors and test results) and walks out when it ends. Claude visits with `{"do":"office"}` or the new **Office** button and stays until told to leave. The Village tab and the browser's info panel list the apprentices with their repo, branch and status.
+- An animated preview of the office in the README.
 
 ### Changed
 - The village needs Node.js 22.18 or newer, in the terminal too.
@@ -58,7 +61,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 ### Added
 - Initial release: a village pane where an AI villager farms, fishes and chats with its neighbours, steered by your wishes.
 
-[Unreleased]: https://github.com/NicoReber/cozy-village/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/NicoReber/cozy-village/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/NicoReber/cozy-village/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/NicoReber/cozy-village/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/NicoReber/cozy-village/compare/v0.4.1...v0.5.0
+[0.4.1]: https://github.com/NicoReber/cozy-village/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/NicoReber/cozy-village/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/NicoReber/cozy-village/releases/tag/v0.3.0
 [0.1.0]: https://github.com/NicoReber/cozy-village/releases/tag/v0.1.0
