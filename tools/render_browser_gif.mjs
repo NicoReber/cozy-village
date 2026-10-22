@@ -1,4 +1,5 @@
 // Renders docs/browser.gif: films the real browser view while it replays the scripted scenes in tools/browser_scene.ts.
+// With `office` it renders docs/office.gif from tools/office_scene.ts instead.
 //
 // Copies the scene script into tests/ for one run of `claude plugin test`, serves the browser view from a small replay
 // server of its own (the page and its /events stream, as web/server.mjs serves them), opens the page in headless
@@ -6,6 +7,7 @@
 // the frames to Python with Pillow to write the GIF. Run from the repository root:
 //
 //     node tools/render_browser_gif.mjs
+//     node tools/render_browser_gif.mjs office
 //
 // Needs Node 22+, Chrome (CHROME to point elsewhere) and Python with Pillow.
 
@@ -17,6 +19,8 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
+/** Which film: `browser` (the default) or `office`; it names the scene script and the GIF. */
+const FILM = process.argv[2] ?? 'browser'
 const WIDTH = 1280
 const HEIGHT = 720
 /** The GIF is the page scaled down to this. */
@@ -36,7 +40,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms))
 
 // 1. record the scenes
 const copy = join(ROOT, 'tests', 'zz_browser_scene.test.ts')
-copyFileSync(join(ROOT, 'tools', 'browser_scene.ts'), copy)
+copyFileSync(join(ROOT, 'tools', `${FILM}_scene.ts`), copy)
 let output
 try {
   // the test runner prints a test's console lines on stderr
@@ -109,14 +113,16 @@ let started = 0
 for (const [k, tick] of ticks.entries()) {
   if (k === 0 || tick.label !== ticks[k - 1].label) {
     // a new scene: let the camera find Claude, then hold it still (a small drag stops following), so a frame
-    // only differs from the one before where something moves
-    await cdp('Runtime.evaluate', { expression: "document.getElementById('follow').click()" })
+    // only differs from the one before where something moves; the office film shows the whole room instead
+    await cdp('Runtime.evaluate', { expression: `document.getElementById('${FILM === 'office' ? 'fit' : 'follow'}').click()` })
     for (let i = 0; i < 6; i++) { await post(tick.body); await sleep(TICK_MS) }
-    const at = { x: WIDTH / 2, y: HEIGHT / 2, button: 'left', clickCount: 1 }
-    await cdp('Input.dispatchMouseEvent', { type: 'mousePressed', ...at })
-    await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', ...at, x: at.x + 6 })
-    await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', ...at, x: at.x })
-    await cdp('Input.dispatchMouseEvent', { type: 'mouseReleased', ...at })
+    if (FILM !== 'office') {
+      const at = { x: WIDTH / 2, y: HEIGHT / 2, button: 'left', clickCount: 1 }
+      await cdp('Input.dispatchMouseEvent', { type: 'mousePressed', ...at })
+      await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', ...at, x: at.x + 6 })
+      await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', ...at, x: at.x })
+      await cdp('Input.dispatchMouseEvent', { type: 'mouseReleased', ...at })
+    }
     started = Date.now() - k * TICK_MS
   }
   await post(tick.body)
@@ -135,7 +141,7 @@ console.log(`${n} frames filmed`)
 
 // 4. the GIF
 mkdirSync(join(ROOT, 'docs'), { recursive: true })
-const out = join(ROOT, 'docs', 'browser.gif')
+const out = join(ROOT, 'docs', `${FILM}.gif`)
 // one palette for every frame and no dithering, so pixel art stays crisp and a pixel that did not change keeps its
 // index; those pixels then become transparent, which the GIF's compression all but erases
 const py = `
