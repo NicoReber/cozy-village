@@ -50,7 +50,7 @@ It listens on this computer's loopback address only, and the link carries a rand
 
 ## Requirements
 
-Claude Code with function-hook plugins (mods). In the terminal the village is drawn in character cells and looks best in the fullscreen layout. The browser view needs [Node.js](https://nodejs.org) on the computer.
+Claude Code with function-hook plugins (mods). In the terminal the village is drawn in character cells and looks best in the fullscreen layout. The browser view needs [Node.js](https://nodejs.org) 22.18 or newer on the computer (it runs the game's TypeScript directly).
 
 ## Install
 

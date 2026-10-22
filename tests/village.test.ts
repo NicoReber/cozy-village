@@ -3,6 +3,7 @@ import { expect, test } from 'claude-code/testing'
 import {
   answerMore, applyDiary, applyProject, BIKES, charge, chooseReply, createWorld, diaryPrompt, echoTests, echoTool, echoTurn, enqueue, explode, frame, KIND_AT, parseActions, offerReplies, remember, postcard, restore, ROWS, snapshot, step, summary, systemPrompt, ticker, VILLAGERS,
 } from '../hooks/game'
+import { act, createHost, finishJob, LEASE_MS, saveOf, takeJob, tickHost, WISH_WAIT_MS } from '../hooks/host'
 import { CHORES, mapPayload, statePayload } from '../hooks/web'
 
 const PANE = {
@@ -620,4 +621,54 @@ test('locked bikes keep everyone off them, so the data center runs flat and turn
   enqueue(w, [{ do: 'unlock' }])
   run(w, 2000)
   expect(w.dc.locked).toBe(false)
+})
+
+test('the shared village hands a wish to a session and acts on its answer', async () => {
+  const h = createHost(undefined)
+  h.world.events = []
+  act(h, { kind: 'wish', text: 'go fishing' }, 0)
+  expect(h.world.thinking).toBe(true)
+  act(h, { kind: 'wish', text: 'and chop wood' }, 0)
+  expect(h.jobs.length).toBe(1)
+  const job = takeJob(h, 0)
+  expect(job?.kind).toBe('wish')
+  expect(job?.prompt).toContain('go fishing')
+  expect(takeJob(h, 1000)).toBe(null)
+  expect(takeJob(h, LEASE_MS + 1)?.id).toBe(job?.id)
+  expect(finishJob(h, job!.id, '[{"do":"fish"}]')).toBe(true)
+  expect(finishJob(h, job!.id, '[{"do":"fish"}]')).toBe(false)
+  expect(h.world.thinking).toBe(false)
+  expect(h.world.queue.length + (h.world.current ? 1 : 0)).toBeGreaterThan(0)
+  tickHost(h, 0)
+  expect(h.chat.some(l => l.who === 'you' && l.text === 'go fishing')).toBe(true)
+})
+
+test('a wish no session takes is dropped, a failed one gets a foggy answer', async () => {
+  const h = createHost(undefined)
+  act(h, { kind: 'wish', text: 'plant pumpkins' }, 0)
+  tickHost(h, WISH_WAIT_MS + 1)
+  expect(h.jobs.length).toBe(0)
+  expect(h.world.thinking).toBe(false)
+  act(h, { kind: 'wish', text: 'plant pumpkins' }, 0)
+  const job = takeJob(h, 0)!
+  finishJob(h, job.id, null, 'timed out')
+  expect(h.world.player.bubble?.text).toContain('timed out')
+})
+
+test('the shared village queues one diary job per finished day and keeps its save', async () => {
+  const h = createHost(undefined)
+  h.world.memory.tom = [{ day: 1, text: 'Caught a big bass.', kind: 'event' }]
+  h.world.diaryDue = [1]
+  tickHost(h, 0)
+  tickHost(h, 0)
+  expect(h.jobs.filter(j => j.kind === 'diary').length).toBe(1)
+  const job = takeJob(h, 0)!
+  finishJob(h, job.id, null)
+  expect(h.world.diaryDue).toEqual([])
+  act(h, { kind: 'chore', key: 'toString' }, 0)
+  act(h, { kind: 'chore', key: 'fish' }, 0)
+  expect(h.world.queue.length + (h.world.current ? 1 : 0)).toBe(1)
+  h.world.bells = 1234
+  const again = createHost(JSON.parse(JSON.stringify(saveOf(h))))
+  expect(again.world.bells).toBe(1234)
 })
