@@ -124,6 +124,7 @@ hooks/
   catalog.ts     data tables: crops, shop, recipes, projects, bugs, fish, museum
   museum.ts      the museum interior and the curator's lines
   web.ts         what the browser view is sent: the map and the moving parts
+  host.ts        the shared village the server runs: sessions, panes and the model jobs it hands out
 types/index.d.ts the plugin's state contract
 web/             the browser view: server.mjs (local server), index.html and village.js (canvas renderer)
 tests/           claude plugin test suite

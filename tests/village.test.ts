@@ -1,9 +1,11 @@
 import { expect, test } from 'claude-code/testing'
 
 import {
-  answerMore, applyDiary, applyProject, BIKES, charge, chooseReply, createWorld, diaryPrompt, echoTests, echoTool, echoTurn, enqueue, explode, frame, KIND_AT, parseActions, offerReplies, remember, postcard, restore, ROWS, snapshot, step, summary, systemPrompt, ticker, VILLAGERS,
+  answerMore, applyDiary, applyProject, BIKES, charge, chooseReply, createWorld, diaryPrompt, echoTests, echoTool, echoTurn, encode, enqueue, explode, frame, KIND_AT, parseActions, offerReplies, remember, postcard, restore, ROWS, snapshot, step, summary, systemPrompt, ticker, VILLAGERS,
 } from '../hooks/game'
-import { act, createHost, finishJob, LEASE_MS, saveOf, takeJob, tickHost, WISH_WAIT_MS } from '../hooks/host'
+import {
+  act, bye, createHost, finishJob, forget, hello, LEASE_MS, memoryReport, pane, saveOf, SESSION_STALE_MS, sessionEvent, takeJob, takePostcard, tickHost, WISH_WAIT_MS,
+} from '../hooks/host'
 import { CHORES, mapPayload, statePayload } from '../hooks/web'
 
 const PANE = {
@@ -671,4 +673,47 @@ test('the shared village queues one diary job per finished day and keeps its sav
   h.world.bells = 1234
   const again = createHost(JSON.parse(JSON.stringify(saveOf(h))))
   expect(again.world.bells).toBe(1234)
+})
+
+test('sessions connect to the shared village, mirror their work there and go stale', async () => {
+  const h = createHost(undefined)
+  expect(hello(h, 's-1', { repo: 'cozy-village', branch: 'main' }, 0)).toBe(true)
+  expect(hello(h, 's-1', {}, 10)).toBe(false)
+  expect(h.sessions.get('s-1')?.repo).toBe('cozy-village')
+  sessionEvent(h, 's-1', { type: 'tool', tool: 'Bash' }, 20)
+  expect(h.sessions.get('s-1')?.status).toBe('working')
+  expect(h.world.echo?.kind).toBe('shell')
+  sessionEvent(h, 's-1', { type: 'turn', seconds: 45, outcome: 'answer' }, 30)
+  expect(h.sessions.get('s-1')?.status).toBe('idle')
+  expect(h.world.cheer).toBeGreaterThan(0)
+  sessionEvent(h, 's-1', { type: 'tests', passed: true }, 40)
+  expect(h.world.rainbow).toBeGreaterThan(0)
+  sessionEvent(h, 's-2', { type: 'tool', tool: 'Read' }, 50)
+  expect(h.sessions.size).toBe(2)
+  bye(h, 's-2')
+  expect(h.sessions.size).toBe(1)
+  tickHost(h, 40 + SESSION_STALE_MS + 1)
+  expect(h.sessions.size).toBe(0)
+})
+
+test('a pane gets the picture, the chat and only the headlines it has not seen', async () => {
+  const h = createHost(undefined)
+  h.world.announce.push('Tests passed!')
+  tickHost(h, 0)
+  const first = pane(h, 60, 0, true)
+  expect(first.cols).toBe(60)
+  expect(first.cells).toBe(encode(frame(h.world, 60)))
+  expect(first.announce).toEqual(['Tests passed!'])
+  expect(first.info?.people.length).toBe(VILLAGERS.length + 1)
+  const second = pane(h, 999, first.seq, false)
+  expect(second.cols).toBe(80)
+  expect(second.announce).toEqual([])
+  expect(second.info).toBe(undefined)
+  expect(takePostcard(h, 40)).toContain('village')
+  expect(memoryReport(h)).toContain('Claude')
+  h.world.friendship.tom = 5
+  h.world.diaryDue = [1]
+  forget(h)
+  expect(h.world.friendship.tom).toBe(0)
+  expect(h.world.diaryDue).toEqual([])
 })

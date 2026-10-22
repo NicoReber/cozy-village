@@ -1,30 +1,44 @@
 // The village as the shared server runs it: one world, its chat, and the model calls it hands to sessions.
 // Pure logic, no `$` and no Node: web/server.mjs drives it with a timer, a save file and HTTP. Only a Claude
 // Code session can call a model, so a wish or a diary becomes a job that a connected session takes, runs
-// and answers.
+// and answers. Sessions say hello, report what their real work is doing, and read the pane's picture back.
 
 import type { LogLine } from '../types'
-import { applyDiary, createWorld, DIARY_SYSTEM, diaryPrompt, enqueue, heardWish, parseActions, restore, sayPlayer, snapshot, step, summary, systemPrompt } from './game'
+import {
+  applyDiary, createWorld, DIARY_SYSTEM, diaryPrompt, echoTests, echoTool, echoTurn, encode, enqueue, frame, heardWish, MAX_VIEW,
+  memoryText, parseActions, postcard, restore, sayPlayer, snapshot, step, summary, systemPrompt, ticker, VILLAGERS,
+} from './game'
 import type { World } from './game'
-import { CHORES } from './web'
+import { CHORES, infoPayload } from './web'
 
 /** A model call the village waits for; `system` and `prompt` go to the model as they are. */
 export type Job = { id: number; kind: 'wish' | 'diary'; system: string; prompt: string; maxTokens: number; day?: number; at: number }
 /** What a pane or a browser asks the village for. */
 export type HostAction = { kind?: unknown; text?: unknown; key?: unknown }
+/** A Claude Code session connected to the village, and what its real work is doing. */
+export type Session = { id: string; repo: string; branch: string; since: number; seen: number; status: 'idle' | 'working'; tool: string }
+/** What a session reports: a tool call starting, a turn ending, a test or build run finishing. */
+export type SessionEvent = { type?: unknown; tool?: unknown; seconds?: unknown; outcome?: unknown; passed?: unknown }
 
 /** A taken job that is not answered in this long goes back on the list (the model call times out at 60 s). */
 export const LEASE_MS = 90_000
 /** A wish no session took in this long is dropped (a diary waits: the day stays due in the save). */
 export const WISH_WAIT_MS = 120_000
+/** A session not heard from in this long is gone (its pane polls several times a second, its job poll every few). */
+export const SESSION_STALE_MS = 60_000
 const CHAT_LINES = 60
+const NAMED = 120
+/** A short line from a session, never more than `max` characters. */
+const short = (v: unknown, max = NAMED) => (typeof v === 'string' ? v.slice(0, max) : '')
 
 export type Host = {
   world: World
   /** The last lines of the village's chat, for panes and browsers. */
   chat: LogLine[]
-  /** Headlines since the last look, for the sessions' toasts. */
-  announce: string[]
+  /** The latest headlines, numbered, for the sessions' toasts; each pane asks for those after the last it saw. */
+  announce: { seq: number; text: string }[]
+  announced: number
+  sessions: Map<string, Session>
   jobs: Job[]
   /** When each job was handed out, by id; a job that is not in here waits for a session. */
   taken: Map<number, number>
@@ -36,7 +50,9 @@ export function createHost(save: unknown, options: { adults?: boolean } = {}): H
   const world = createWorld()
   world.adults = options.adults === true
   restore(world, save)
-  return { world, chat: [], announce: [], jobs: [], taken: new Map(), nextId: 1, savedHour: Math.floor(world.minutes / 60) }
+  return {
+    world, chat: [], announce: [], announced: 0, sessions: new Map(), jobs: [], taken: new Map(), nextId: 1, savedHour: Math.floor(world.minutes / 60),
+  }
 }
 
 /** One tick of the village; true when it is time to save (every in-game hour). */
@@ -48,8 +64,9 @@ export function tickHost(h: Host, now: number): boolean {
   }
   const lines = w.log.splice(0)
   if (lines.length) h.chat = [...h.chat, ...lines].slice(-CHAT_LINES)
-  h.announce.push(...w.announce.splice(0))
+  for (const text of w.announce.splice(0)) h.announce.push({ seq: ++h.announced, text })
   h.announce = h.announce.slice(-10)
+  for (const s of h.sessions.values()) if (now - s.seen > SESSION_STALE_MS) h.sessions.delete(s.id)
   const day = w.diaryDue[0]
   if (day !== undefined && !h.jobs.some(j => j.kind === 'diary')) {
     const prompt = diaryPrompt(w, day)
@@ -112,3 +129,84 @@ export function finishJob(h: Host, id: number, text: string | null, reason = 'no
 
 /** What the save file holds. */
 export const saveOf = (h: Host) => snapshot(h.world)
+
+// ---------- the sessions ----------
+
+/** A session connects, or says it is still there; true when it is new. */
+export function hello(h: Host, id: string, about: { repo?: unknown; branch?: unknown }, now: number): boolean {
+  const known = h.sessions.get(id)
+  if (known) {
+    known.seen = now
+    if (about.repo !== undefined) known.repo = short(about.repo)
+    if (about.branch !== undefined) known.branch = short(about.branch)
+    return false
+  }
+  h.sessions.set(id, { id, repo: short(about.repo), branch: short(about.branch), since: now, seen: now, status: 'idle', tool: '' })
+  return true
+}
+
+export function bye(h: Host, id: string) {
+  h.sessions.delete(id)
+}
+
+/** What a session's real work is doing; the village mirrors it the way it mirrored its own session before. */
+export function sessionEvent(h: Host, id: string, e: SessionEvent, now: number) {
+  hello(h, id, {}, now)
+  const s = h.sessions.get(id)!
+  const w = h.world
+  if (e.type === 'tool' && typeof e.tool === 'string') {
+    s.status = 'working'
+    s.tool = short(e.tool, 60)
+    echoTool(w, s.tool)
+  } else if (e.type === 'turn') {
+    s.status = 'idle'
+    s.tool = ''
+    const outcome = e.outcome === 'answer' || e.outcome === 'aborted' ? e.outcome : 'error'
+    echoTurn(w, typeof e.seconds === 'number' && e.seconds >= 0 ? e.seconds : 0, outcome)
+  } else if (e.type === 'tests' && typeof e.passed === 'boolean') {
+    echoTests(w, e.passed)
+  }
+}
+
+// ---------- what panes show ----------
+
+/** The pane's picture at `cols` wide, its chat, and the headlines after `since`; the tab panels with `info`. */
+export function pane(h: Host, cols: number, since: number, info: boolean) {
+  const w = h.world
+  const width = Math.max(24, Math.min(MAX_VIEW, Math.floor(cols) || MAX_VIEW))
+  return {
+    cols: width,
+    cells: encode(frame(w, width)),
+    chat: h.chat,
+    thinking: w.thinking,
+    scene: w.scene,
+    museumOpen: w.projects.museum.done,
+    ticker: ticker(w),
+    announce: h.announce.filter(a => a.seq > since).map(a => a.text),
+    seq: h.announced,
+    info: info ? infoPayload(w) : undefined,
+  }
+}
+
+/** A postcard of the scene; the picture flashes as if a photo was taken. */
+export function takePostcard(h: Host, cols: number): string {
+  h.world.flash = 3
+  return postcard(h.world, Math.max(24, Math.min(MAX_VIEW, Math.floor(cols) || MAX_VIEW)))
+}
+
+export function memoryReport(h: Host): string {
+  const w = h.world
+  const blocks = [`Claude\n${memoryText(w, 'claude', 10)}`]
+  for (const v of VILLAGERS) blocks.push(`${v.name} (friendship ${w.friendship[v.id] ?? 0})\n${memoryText(w, v.id, 5)}`)
+  return blocks.join('\n\n')
+}
+
+/** Everyone forgets everything: memories, friendships and the diaries still to write. */
+export function forget(h: Host) {
+  const fresh = createWorld()
+  h.world.memory = fresh.memory
+  h.world.friendship = fresh.friendship
+  h.world.diaryDue = []
+  for (const j of h.jobs.filter(j => j.kind === 'diary')) h.taken.delete(j.id)
+  h.jobs = h.jobs.filter(j => j.kind !== 'diary')
+}

@@ -6,6 +6,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 ## [Unreleased]
 ### Added
 - The browser server can run the village itself (`node web/server.mjs --world`): one world with its own save file, ready for every session to connect to. Wishes and diaries wait as jobs for a session to run the model call.
+- The world-mode server's session API: sessions find it through `server.json`, say hello and goodbye, report tool calls, turns and test runs, poll the pane's picture, chat and headlines, and take and answer the model jobs. Only one server runs at a time, and it saves and stops once no session has been around for five minutes.
 
 ### Changed
 - The browser view needs Node.js 22.18 or newer.
