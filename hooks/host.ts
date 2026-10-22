@@ -9,6 +9,7 @@ import {
   memoryText, parseActions, postcard, restore, sayPlayer, snapshot, step, summary, systemPrompt, ticker, VILLAGERS,
 } from './game'
 import type { World } from './game'
+import { joinOffice, leaveOffice, officeWork } from './office'
 import { CHORES, infoPayload } from './web'
 
 /**
@@ -70,7 +71,7 @@ export function tickHost(h: Host, now: number): boolean {
   if (lines.length) h.chat = [...h.chat, ...lines].slice(-CHAT_LINES)
   for (const text of w.announce.splice(0)) h.announce.push({ seq: ++h.announced, text })
   h.announce = h.announce.slice(-10)
-  for (const s of h.sessions.values()) if (now - s.seen > SESSION_STALE_MS) h.sessions.delete(s.id)
+  for (const s of h.sessions.values()) if (now - s.seen > SESSION_STALE_MS) bye(h, s.id)
   const day = w.diaryDue[0]
   if (day !== undefined && !h.jobs.some(j => j.kind === 'diary')) {
     const prompt = diaryPrompt(w, day)
@@ -98,6 +99,8 @@ export function act(h: Host, a: HostAction, now: number) {
     enqueue(w, CHORES[a.key].plan as Parameters<typeof enqueue>[1])
   } else if (a.kind === 'museum' && w.projects.museum.done) {
     enqueue(w, [{ do: w.scene === 'museum' ? 'exit' : 'tour' }])
+  } else if (a.kind === 'office') {
+    enqueue(w, [{ do: w.scene === 'office' ? 'exit' : 'office' }])
   }
 }
 
@@ -138,21 +141,27 @@ export const saveOf = (h: Host) => snapshot(h.world)
 
 // ---------- the sessions ----------
 
-/** A session connects, or says it is still there; true when it is new. */
+/** A session connects, or says it is still there; true when it is new. Its apprentice comes to the office. */
 export function hello(h: Host, id: string, about: { repo?: unknown; branch?: unknown }, now: number): boolean {
   const known = h.sessions.get(id)
   if (known) {
     known.seen = now
+    if (about.repo === undefined && about.branch === undefined) return false
     if (about.repo !== undefined) known.repo = short(about.repo)
     if (about.branch !== undefined) known.branch = short(about.branch)
+    joinOffice(h.world.office, id, { repo: known.repo, branch: known.branch })
     return false
   }
-  h.sessions.set(id, { id, repo: short(about.repo), branch: short(about.branch), since: now, seen: now, status: 'idle', tool: '' })
+  const s: Session = { id, repo: short(about.repo), branch: short(about.branch), since: now, seen: now, status: 'idle', tool: '' }
+  h.sessions.set(id, s)
+  joinOffice(h.world.office, id, { repo: s.repo, branch: s.branch })
   return true
 }
 
+/** A session leaves, or went quiet: its apprentice clocks out. */
 export function bye(h: Host, id: string) {
   h.sessions.delete(id)
+  leaveOffice(h.world.office, id)
 }
 
 /** What a session's real work is doing; the village mirrors it the way it mirrored its own session before. */
@@ -164,13 +173,17 @@ export function sessionEvent(h: Host, id: string, e: SessionEvent, now: number) 
     s.status = 'working'
     s.tool = short(e.tool, 60)
     echoTool(w, s.tool)
+    officeWork(w.office, id, { type: 'tool', tool: s.tool })
   } else if (e.type === 'turn') {
     s.status = 'idle'
     s.tool = ''
     const outcome = e.outcome === 'answer' || e.outcome === 'aborted' ? e.outcome : 'error'
-    echoTurn(w, typeof e.seconds === 'number' && e.seconds >= 0 ? e.seconds : 0, outcome)
+    const seconds = typeof e.seconds === 'number' && e.seconds >= 0 ? e.seconds : 0
+    echoTurn(w, seconds, outcome)
+    officeWork(w.office, id, { type: 'turn', seconds, outcome })
   } else if (e.type === 'tests' && typeof e.passed === 'boolean') {
     echoTests(w, e.passed)
+    officeWork(w.office, id, { type: 'tests', passed: e.passed })
   }
 }
 
@@ -187,6 +200,7 @@ export function pane(h: Host, cols: number, since: number, info: boolean, cells 
     thinking: w.thinking,
     scene: w.scene,
     museumOpen: w.projects.museum.done,
+    staff: w.office.staff.filter(a => !a.leaving).length,
     ticker: ticker(w),
     announce: h.announce.filter(a => a.seq > since).map(a => a.text),
     seq: h.announced,

@@ -295,6 +295,84 @@ function drawBuilding(b, s) {
   return { canvas: c, x: b.x0 * T - ox, y: b.y0 * T - oy }
 }
 
+/** Status colours of the screens on the office desks. */
+const SCREEN = { working: '#69f0ae', idle: '#607d8b', done: '#ffd54f', error: '#ff5252' }
+
+/** The office: a light floor, a blue carpet down the middle, a desk with a screen for every session, coffee and plants. */
+function buildOffice(m, g, at) {
+  const W = m.w, Hh = m.h
+  const floor = tilePattern(g, ART.plaza, { a: '#dde3e6', b: '#c9d1d5', c: '#eef2f4' })
+  const carpet = tilePattern(g, ART.plaza, { a: '#5c6bc0', b: '#4e5cb0', c: '#6f7dcc' })
+  g.fillStyle = '#14171c'; g.fillRect(0, 0, ground.width, ground.height)
+  for (let y = 0; y < Hh; y++) {
+    for (let x = 0; x < W; x++) {
+      const t = at(x, y)
+      if (t !== 'w' && t !== 'v') { g.fillStyle = t === 'c' ? carpet : floor; g.fillRect(x * T, y * T, T, T) }
+      if (t === 'd') { g.fillStyle = '#8d6e63'; g.fillRect(x * T + 2, y * T + 4, 12, 10) }
+      if (t === 'w' || t === 'v') {
+        const face = at(x, y + 1) !== 'w' && at(x, y + 1) !== 'v' && y < Hh - 1
+        const pane = t === 'v'
+        props.push({ y: y * T + 1, draw: c => {
+          c.fillStyle = '#455a64'; c.fillRect(x * T, y * T, T, T)
+          c.fillStyle = '#546e7a'; c.fillRect(x * T, y * T, T, 2)
+          if (face) { c.fillStyle = '#b0bec5'; c.fillRect(x * T, y * T + 8, T, 8); c.fillStyle = '#78909c'; c.fillRect(x * T, y * T + 15, T, 1) }
+          if (pane) { c.fillStyle = '#b3e5fc'; c.fillRect(x * T + 3, y * T + 4, 10, 9); c.fillStyle = '#ffffff'; c.fillRect(x * T + 4, y * T + 5, 3, 2); c.fillStyle = '#455a64'; c.fillRect(x * T + 7, y * T + 4, 1, 9) }
+        } })
+      }
+      if (t === 'p') {
+        const pl = sprite('plant', 12, 9, sg => paint(sg, ART.plant, { g: '#4caf50', G: '#2e7d32', o: '#6d4c41', c: '#b85a35' }))
+        props.push({ y: (y + 1) * T, draw: c => c.drawImage(pl, x * T + 2, y * T + 5) })
+      }
+      if (t === 'o') {
+        props.push({ y: (y + 1) * T, draw: (c, now) => {
+          c.fillStyle = '#5d4037'; c.fillRect(x * T + 3, y * T + 2, 10, 13)
+          c.fillStyle = '#3e2723'; c.fillRect(x * T + 5, y * T + 8, 6, 4)
+          c.fillStyle = '#ffffff'; c.fillRect(x * T + 6, y * T + 10, 4, 3)
+          c.fillStyle = '#ff5252'; c.fillRect(x * T + 11, y * T + 4, 1, 1)
+          if (Math.floor(now / 500) % 2) { c.fillStyle = 'rgba(255,255,255,.6)'; c.fillRect(x * T + 7, y * T - 1, 1, 2); c.fillRect(x * T + 9, y * T - 3, 1, 2) }
+        } })
+      }
+      if (t === 'b' && at(x - 1, y) !== 'b') {
+        props.push({ y: (y + 1) * T, draw: c => {
+          c.fillStyle = '#90a4ae'; c.fillRect(x * T, y * T + 1, 2 * T, 12)
+          c.fillStyle = '#fafafa'; c.fillRect(x * T + 1, y * T + 2, 2 * T - 2, 10)
+          c.fillStyle = '#1e88e5'; c.fillRect(x * T + 4, y * T + 5, 9, 1); c.fillRect(x * T + 4, y * T + 8, 14, 1)
+          c.fillStyle = '#e53935'; c.fillRect(x * T + 20, y * T + 4, 5, 5)
+        } })
+      }
+    }
+  }
+  // each desk: a wooden top over two cells, a screen in its owner's status colour, a keyboard and a chair
+  m.desks.forEach((d, k) => {
+    props.push({ y: (d.y + 1) * T - 1, draw: (c, now) => {
+      const X = d.x * T, Y = d.y * T
+      c.fillStyle = '#6d4c41'; c.fillRect(X + 1, Y + 6, 2 * T - 2, 8)
+      c.fillStyle = '#8d6e63'; c.fillRect(X + 1, Y + 5, 2 * T - 2, 3)
+      c.fillStyle = '#4e342e'; c.fillRect(X + 2, Y + 14, 2, 2); c.fillRect(X + 2 * T - 4, Y + 14, 2, 2)
+      const status = state?.desks?.[k]
+      c.fillStyle = '#263238'; c.fillRect(X + 3, Y - 4, 12, 9); c.fillRect(X + 8, Y + 4, 2, 2)
+      c.fillStyle = status ? SCREEN[status] : '#37474f'
+      if (status === 'working' && Math.floor(now / 300) % 2) c.fillStyle = '#b9f6ca'
+      c.fillRect(X + 4, Y - 3, 10, 6)
+      if (status === 'working') { c.fillStyle = '#1b5e20'; for (let r = 0; r < 3; r++) c.fillRect(X + 5, Y - 2 + r * 2, 2 + ((Math.floor(now / 200) + r * 3) % 7), 1) }
+      c.fillStyle = '#cfd8dc'; c.fillRect(X + 18, Y + 6, 10, 3)
+    } })
+    props.push({ y: (d.y + 2) * T - 6, draw: c => {
+      const X = d.x * T, Y = (d.y + 1) * T
+      c.fillStyle = '#37474f'; c.fillRect(X + 3, Y + 6, 10, 3); c.fillRect(X + 7, Y + 9, 2, 4)
+    } })
+  })
+  const t = m.title
+  props.push({ y: t.y * T + 2, draw: c => {
+    c.font = '800 7px "Segoe UI", system-ui, sans-serif'
+    const tw = c.measureText(t.text).width + 8
+    const cx = (t.x + (t.text.length + 2) / 2) * T
+    c.fillStyle = '#263238'; c.fillRect(cx - tw / 2, t.y * T + 3, tw, 10)
+    c.strokeStyle = '#b3e5fc'; c.strokeRect(cx - tw / 2 + 0.5, t.y * T + 3.5, tw - 1, 9)
+    c.fillStyle = '#e1f5fe'; c.textAlign = 'center'; c.fillText(t.text, cx, t.y * T + 10.5)
+  } })
+}
+
 function buildMap(m) {
   sprites.clear()
   props = []; lamps = []; windows = []; sparkles = []
@@ -302,6 +380,10 @@ function buildMap(m) {
   ground = makeCanvas(W * T, Hh * T + 12)
   const g = ground.getContext('2d')
   const at = (x, y) => (x < 0 || y < 0 || x >= W || y >= Hh ? '' : m.rows[y][x])
+  if (m.scene === 'office') {
+    buildOffice(m, g, at)
+    return
+  }
   if (m.scene === 'museum') {
     const floor = tilePattern(g, ART.wood, { a: '#d4b48a', b: '#b08c62', c: '#e2c7a2' })
     const carpet = tilePattern(g, ART.plaza, { a: '#a83c3c', b: '#8a2e2e', c: '#c25050' })
@@ -338,7 +420,7 @@ function buildMap(m) {
         else { c.fillRect(cs.x * T + 7, cs.y * T + 4, 2, 4); c.fillRect(cs.x * T + 6, cs.y * T + 5, 4, 2) }
       } })
     }
-    for (const h of m.halls) {
+    for (const h of m.halls ?? []) {
       props.push({ y: h.y * T + 2, draw: c => {
         c.font = '800 7px "Segoe UI", system-ui, sans-serif'
         const tw = c.measureText(h.text).width + 8
@@ -687,8 +769,8 @@ function frame(now) {
   ctx.setTransform(1, 0, 0, 1, 0, 0)
   ctx.imageSmoothingEnabled = false
   if (!map || !state) { ctx.fillStyle = '#14171c'; ctx.fillRect(0, 0, W, Hc); return }
-  const museum = map.scene === 'museum'
-  lightNow = daylight(state.minutes, raining && !museum)
+  const indoor = map.scene !== 'village'
+  lightNow = daylight(state.minutes, raining && !indoor)
   const night = lightNow.glow > 0.4
 
   // everyone glides from where they were to where the last tick put them
@@ -701,7 +783,7 @@ function frame(now) {
   if (cam.follow && me) {
     const { w, h } = viewSize()
     const tx = me.x * T + 8 - w / 2, ty = me.y * T + 8 - h / 2
-    // a long jump (a new scene, the museum door) cuts; anything else glides
+    // a long jump (a new scene, a building's door) cuts; anything else glides
     const far = Math.abs(tx - cam.x) > w || Math.abs(ty - cam.y) > h
     cam.x += (tx - cam.x) * (far ? 1 : 0.12)
     cam.y += (ty - cam.y) * (far ? 1 : 0.12)
@@ -710,9 +792,9 @@ function frame(now) {
   const z = cam.zoom
   const ox = Math.round(-cam.x * z), oy = Math.round(-cam.y * z)
 
-  ctx.fillStyle = museum ? '#1f1512' : (SEASONS[map.season] ?? SEASONS.spring).grass[1]
+  ctx.fillStyle = indoor ? '#1f1512' : (SEASONS[map.season] ?? SEASONS.spring).grass[1]
   ctx.fillRect(0, 0, W, Hc)
-  if (!museum) { ctx.fillStyle = 'rgba(11,42,20,.45)'; ctx.fillRect(0, 0, W, Hc) }
+  if (!indoor) { ctx.fillStyle = 'rgba(11,42,20,.45)'; ctx.fillRect(0, 0, W, Hc) }
   ctx.setTransform(z, 0, 0, z, ox, oy)
   ctx.drawImage(ground, 0, 0)
 
@@ -734,6 +816,7 @@ function frame(now) {
   for (const m of state.movers) {
     const s = shown.get(m.k)
     if (!s) continue
+    if (m.look && !LOOKS[m.k]) LOOKS[m.k] = { ...m.look, hat: 'none' }
     const walking = now < s.walkUntil
     const step = walking ? 1 + (Math.floor(now / 130) % 2) : 0
     list.push({ y: (s.y + 1) * T + 0.5, draw: c => {
@@ -748,12 +831,14 @@ function frame(now) {
       }
       if (m.k === 'hoot') { c.drawImage(owlSprite(), X + 2, Y + 1); return }
       const look = LOOKS[m.k] ?? LOOKS.me
-      const img = personSprite(m.k, s.face === 'left' || s.face === 'right' ? 'side' : s.face, step)
+      // an apprentice at their desk faces the screen
+      const face = m.sit && !walking ? 'up' : s.face
+      const img = personSprite(m.k, face === 'left' || face === 'right' ? 'side' : face, step)
       const sc = look.small ? 0.85 : 1
       const bob = walking && step === 2 ? -1 : 0
       c.save()
-      c.translate(X + (s.face === 'left' ? 16 : 0), Y + 15 - 25 * sc + bob)
-      c.scale(s.face === 'left' ? -sc : sc, sc)
+      c.translate(X + (face === 'left' ? 16 : 0), Y + 15 - 25 * sc + bob)
+      c.scale(face === 'left' ? -sc : sc, sc)
       c.drawImage(img, 0, 0)
       c.restore()
       if (m.asleep && Math.floor(now / 700) % 2) { c.fillStyle = '#ffffff'; c.font = '700 6px system-ui'; c.fillText('z', X + 13, Y - 8) }
@@ -781,7 +866,7 @@ function frame(now) {
     ctx.fillStyle = `rgba(${r},${g},${b},${lightNow.amount})`
     ctx.fillRect(0, 0, W, Hc)
   }
-  if (lightNow.glow > 0.05 && !museum) {
+  if (lightNow.glow > 0.05 && !indoor) {
     ctx.globalCompositeOperation = 'lighter'
     const glow = (x, y, r, color) => {
       const sx = x * z + ox, sy = y * z + oy, rr = r * z
@@ -803,7 +888,7 @@ function frame(now) {
   }
 
   // weather and sky shows, over the whole screen
-  if (raining && !museum) {
+  if (raining && !indoor) {
     const snow = map.season === 'winter'
     ctx.fillStyle = snow ? 'rgba(255,255,255,.9)' : 'rgba(207,232,247,.55)'
     for (const p of particles) {
@@ -813,7 +898,7 @@ function frame(now) {
       if (snow) ctx.fillRect(x, y, 3 * dpr, 3 * dpr); else ctx.fillRect(x, y, 1.5 * dpr, 10 * dpr)
     }
   }
-  if (!museum && !raining && !night && (map.season === 'spring' || map.season === 'autumn')) {
+  if (!indoor && !raining && !night && (map.season === 'spring' || map.season === 'autumn')) {
     const colors = map.season === 'spring' ? ['#f8bbd0', '#fce4ec', '#f48fb1'] : ['#e65100', '#f9a825', '#bf360c']
     particles.slice(0, 12).forEach((p, k) => {
       const t = (now / 14000 + p.s) % 1
@@ -821,7 +906,7 @@ function frame(now) {
       ctx.fillRect(((p.x * W * 1.3) - t * W * 0.4) % W, t * Hc, 4 * dpr, 3 * dpr)
     })
   }
-  if (state.meteor && night && !museum) {
+  if (state.meteor && night && !indoor) {
     ctx.strokeStyle = '#fffde7'; ctx.lineWidth = 2 * dpr
     for (let k = 0; k < 3; k++) {
       const t = ((now / 3500 + k / 3) % 1)
@@ -830,7 +915,7 @@ function frame(now) {
       ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 40 * dpr, y - 20 * dpr); ctx.stroke()
     }
   }
-  if (state.fireworks && night && !museum) {
+  if (state.fireworks && night && !indoor) {
     const colors = ['#ff5252', '#ffeb3b', '#69f0ae', '#40c4ff', '#e040fb']
     for (let k = 0; k < 4; k++) {
       const cycle = Math.floor(now / 1800 + k * 0.37)
@@ -842,7 +927,7 @@ function frame(now) {
       ctx.globalAlpha = 1
     }
   }
-  if (state.rainbow > 0 && !museum) {
+  if (state.rainbow > 0 && !indoor) {
     ctx.globalAlpha = Math.min(0.45, state.rainbow / 40)
     ctx.lineWidth = 8 * dpr
     ;['#ef5350', '#ffa726', '#ffee58', '#66bb6a', '#42a5f5', '#ab47bc'].forEach((c, k) => {
@@ -856,7 +941,7 @@ function frame(now) {
   const tagScale = Math.max(0.8, Math.min(1.4, z / (3 * dpr))) * dpr
 
   // the bomb factory: a ruin with rising smoke after a blast, and the blast itself
-  if (state.factory && !museum) {
+  if (state.factory && !indoor) {
     const [fx, fy] = toScreen(65 * T, 11 * T)
     const fw = 7 * T * z, fh = 4 * T * z
     if (state.factory.rubble) {
@@ -902,7 +987,7 @@ function frame(now) {
     }
   }
   // the AI data center: its battery gauge and mood above the roof, and a red glare once it turns evil
-  if (state.datacenter && !museum) {
+  if (state.datacenter && !indoor) {
     const { battery, mood } = state.datacenter
     const [bx, by] = toScreen(39 * T, 19 * T)
     const bw = 7 * T * z, bh = 4 * T * z
@@ -1020,8 +1105,18 @@ const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls)
 const meter = (pct, cls = '') => { const m = el('div', `meter ${cls}`); const i = el('i'); i.style.width = `${Math.round(pct * 100)}%`; m.append(i); return m }
 const cap = t => t[0].toUpperCase() + t.slice(1)
 
+const DESK_WORDS = { working: 'busy', idle: 'idle', done: 'done', error: 'trouble' }
+
 function villageRows() {
   const out = []
+  out.push(el('h4', '', 'Office \u00b7 one apprentice per open session'))
+  if (!info.office?.length) out.push(el('div', 'sub', 'Nobody at work: no Claude Code sessions are open.'))
+  for (const a of info.office ?? []) {
+    const row = el('div', 'row'); const who = el('b', '', a.name); who.style.color = a.color
+    const status = el('span', '', DESK_WORDS[a.status]); status.style.color = SCREEN[a.status]
+    row.append(who, status, el('span', 'sub', `${a.repo || 'no repo'}${a.branch ? ` \u00b7 ${a.branch}` : ''}${a.tool ? ` \u00b7 ${a.tool}` : ''}`))
+    out.push(row)
+  }
   out.push(el('h4', '', 'Requests'))
   if (!info.requests.length) out.push(el('div', 'sub', 'No requests today.'))
   for (const r of info.requests) {
@@ -1093,8 +1188,9 @@ function updateHud() {
   $('bells').textContent = s.bells.toLocaleString('en-US')
   $('doing').textContent = s.thinking ? 'thinking…' : s.label
   $('eventChip').hidden = !s.events
-  $('events').textContent = s.scene === 'museum' ? s.museum : s.events
-  if (s.scene === 'museum') $('eventChip').hidden = false
+  $('events').textContent = s.scene === 'museum' ? s.museum : s.scene === 'office' ? `${s.staff} at their desks` : s.events
+  if (s.scene !== 'village') $('eventChip').hidden = false
+  $('office').textContent = s.scene === 'office' ? 'Leave office' : `Office (${s.staff})`
   $('museum').hidden = !s.museumOpen
   $('museum').textContent = s.scene === 'museum' ? 'Leave museum' : 'Museum tour'
   $('bagText').textContent = s.inv.map(([k, n]) => `${n} ${k}`).join(' · ') || 'empty'
@@ -1128,6 +1224,7 @@ $('wish').onsubmit = e => {
   $('wishText').value = ''
 }
 $('museum').onclick = () => post({ kind: 'museum' })
+$('office').onclick = () => post({ kind: 'office' })
 $('toggleChat').onclick = () => { $('chat').classList.toggle('closed'); $('toggleChat').textContent = $('chat').classList.contains('closed') ? '▸' : '▾' }
 
 // ---------- the stream ----------

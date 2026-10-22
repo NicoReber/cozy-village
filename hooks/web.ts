@@ -6,12 +6,14 @@ import { active, clock, dcMood, eventLabels, H, projectIds, season, seasonDay, V
 import type { Info, LogLine } from '../types'
 import type { World } from './game'
 import { caseAt, HALL_TITLES, IH, interiorTile, IW } from './museum'
+import { atSeat, DESKS, deskStatus, LOOKS, OFFICE_TITLE, officeTile, OH, OW } from './office'
 
 const TILE_CODE: Record<string, string> = {
   grass: 'g', tuft: 't', path: 'p', plaza: 'z', bridge: 'b', water: 'w', fountain: 'f', tree: 'T', apple: 'a',
   roof: 'r', wall: 'l', door: 'd', fence: 'n', soil: 's', flower: 'o', item: 'i',
 }
 const ROOM_CODE: Record<string, string> = { wall: 'w', floor: 'f', carpet: 'c', case: 's', door: 'd', plant: 'p', void: ' ' }
+const OFFICE_CODE: Record<string, string> = { wall: 'w', window: 'v', floor: 'f', carpet: 'c', desk: 'k', door: 'd', plant: 'p', coffee: 'o', board: 'b', void: ' ' }
 const hex = (c: number) => `#${(c & 0xffffff).toString(16).padStart(6, '0')}`
 
 export const NAMES: Record<string, string> = {
@@ -34,6 +36,15 @@ export const CHORES: Record<string, { label: string; plan: { do: string; count?:
 
 /** The map as the browser draws it: tile codes row by row, and what stands on them. */
 export function mapPayload(w: World) {
+  if (w.scene === 'office') {
+    const rows: string[] = []
+    for (let y = 0; y < OH; y++) {
+      let row = ''
+      for (let x = 0; x < OW; x++) row += OFFICE_CODE[officeTile(x, y)] ?? 'f'
+      rows.push(row)
+    }
+    return { scene: 'office', w: OW, h: OH, rows, desks: DESKS, title: OFFICE_TITLE }
+  }
   if (w.scene === 'museum') {
     const rows: string[] = []
     const cases: { x: number; y: number; section: string; color: string; shown: boolean }[] = []
@@ -76,11 +87,18 @@ type Mover = { x: number; y: number; bubble?: { text: string }; asleep?: boolean
 /** Everything that moves or changes by the tick: people, the clock, the weather, the HUD and the chat. */
 export function statePayload(w: World, log: readonly LogLine[]) {
   const museum = w.scene === 'museum'
+  const office = w.scene === 'office'
   const mover = (key: string, m: Mover, extra: Record<string, unknown> = {}) => ({
     k: key, x: m.x, y: m.y, say: m.bubble?.text, name: NAMES[key], color: COLORS[key], ...extra,
   })
+  const inside = mover('me', w.inside, { say: w.thinking ? '…' : w.player.bubble?.text })
   const movers = museum
-    ? [mover('hoot', w.curator), mover('me', w.inside, { say: w.thinking ? '…' : w.player.bubble?.text })]
+    ? [mover('hoot', w.curator), inside]
+    : office
+      ? [...w.office.staff.map(a => {
+        const look = LOOKS[a.look]
+        return mover(`app:${a.id}`, a, { name: a.name, color: hex(look.shirt), look: { hair: hex(look.hair), shirt: hex(look.shirt), pants: hex(look.pants) }, working: a.status === 'working', sit: atSeat(a) && a.desk >= 0 })
+      }), inside]
     : [
       mover('mochi', w.mochi, { asleep: w.mochi.asleep || w.mochi.nap > 0 }),
       ...(w.merchant ? [mover('kiki', w.merchant)] : []),
@@ -110,9 +128,11 @@ export function statePayload(w: World, log: readonly LogLine[]) {
     datacenter: w.projects.datacenter.done ? { battery: Math.round(w.dc.battery), mood: dcMood(w) } : null,
     inv: Object.entries(w.inv).filter(([, n]) => n > 0),
     movers,
-    critters: museum ? [] : w.critters.map(c => ({ x: c.x, y: c.y, kind: c.kind, color: hex(c.color), flies: !!BUGS[c.kind]?.flies })),
-    pickups: museum ? [] : w.pickups.map(p => ({ x: p.x, y: p.y, star: p.kind === 'star' })),
-    digs: museum ? [] : w.digSpots,
+    desks: office ? deskStatus(w.office) : undefined,
+    staff: w.office.staff.filter(a => !a.leaving).length,
+    critters: museum || office ? [] : w.critters.map(c => ({ x: c.x, y: c.y, kind: c.kind, color: hex(c.color), flies: !!BUGS[c.kind]?.flies })),
+    pickups: museum || office ? [] : w.pickups.map(p => ({ x: p.x, y: p.y, star: p.kind === 'star' })),
+    digs: museum || office ? [] : w.digSpots,
     unread: w.mail.some(m => !m.read && m.day <= w.day),
     work: w.current?.do === '_work' ? (w.current as { kind: string }).kind : working && w.echo ? `echo:${w.echo.kind}` : '',
     cheer: w.cheer > 0,
@@ -151,8 +171,12 @@ export function infoPayload(w: World): Info {
       facts: list.filter(m => m.kind === 'fact').slice(-3).map(m => m.text),
     }
   })
+  const office = w.office.staff.filter(a => !a.leaving).map(a => ({
+    name: a.name, color: hex(LOOKS[a.look].shirt), repo: a.repo, branch: a.branch, status: a.status, tool: a.tool,
+  }))
   return {
     projects,
+    office,
     museum: { open: w.projects.museum.done, reward: MUSEUM_REWARD, sections },
     requests: w.requests.map(r => ({ who: NAMES[r.who], color: COLORS[r.who], item: r.item, left: r.amount - r.given, reward: r.reward, done: !!r.done })),
     people,

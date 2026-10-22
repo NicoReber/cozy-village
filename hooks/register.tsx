@@ -24,6 +24,8 @@ const webLink = atom({ plugin: 'cozy-village', key: 'web' } as const, '')
 const info = atom({ plugin: 'cozy-village', key: 'info' } as const, null as Info | null)
 /** Whether the museum is built and Claude is inside it, for the tab bar's button. */
 const museum = atom({ plugin: 'cozy-village', key: 'museum' } as const, { open: false, inside: false })
+/** How many apprentices work at the office and whether Claude is inside it, for the tab bar's button. */
+const office = atom({ plugin: 'cozy-village', key: 'office' } as const, { staff: 0, inside: false })
 
 const ACCENT = '#e6c34a'
 const INK = '#3a2e2a'
@@ -40,6 +42,10 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'village', label: 'Village' },
 ]
 const NAME_WIDTH = 7
+/** How an apprentice's desk reads in the Village tab. */
+const DESK_STATUS: Record<Info['office'][number]['status'], [string, string]> = {
+  working: ['busy', '#69f0ae'], idle: ['idle', '#90a4ae'], done: ['done', '#ffd54f'], error: ['trouble', '#ff5252'],
+}
 const bar = (have: number, total: number, width = 12) => {
   const full = Math.round((Math.min(have, total) / Math.max(1, total)) * width)
   return '█'.repeat(full) + '░'.repeat(width - full)
@@ -185,7 +191,7 @@ async function pollPane($: EngineInterface) {
     const res = await api($, 'GET', `/api/pane?${q({ session: server.session, cols: viewCols, since: pane.since, info: wantInfo ? 1 : 0, cells: surface === 'terminal' ? 1 : 0 })}`)
     if (!res?.ok) return
     const p = JSON.parse(res.text) as {
-      cols: number; cells: string; chat: LogLine[]; thinking: boolean; scene: string; museumOpen: boolean; ticker: string
+      cols: number; cells: string; chat: LogLine[]; thinking: boolean; scene: string; museumOpen: boolean; staff: number; ticker: string
       announce: string[]; seq: number; info?: Info
     }
     pane.since = p.seq
@@ -195,6 +201,8 @@ async function pollPane($: EngineInterface) {
     if (p.thinking !== await read($, thinking)) await update($, thinking, () => p.thinking)
     const place = await read($, museum)
     if (place.open !== p.museumOpen || place.inside !== (p.scene === 'museum')) await update($, museum, () => ({ open: p.museumOpen, inside: p.scene === 'museum' }))
+    const desks = await read($, office)
+    if (desks.staff !== p.staff || desks.inside !== (p.scene === 'office')) await update($, office, () => ({ staff: p.staff, inside: p.scene === 'office' }))
     if (p.info) await update($, info, () => p.info!)
     if (p.cells) {
       pane.cells = p.cells
@@ -337,6 +345,7 @@ export const register: Register = (on, options) => {
     const current = await read($, tab)
     const panels = await read($, info)
     const place = await read($, museum)
+    const desks = await read($, office)
     // map, tab bar, the panel's frame and the framed input take the rest of the rows
     const room = Math.max(3, Math.min(10, e.props.scroll.bodyRows - ROWS - 7))
     const width = viewCols
@@ -374,6 +383,7 @@ export const register: Register = (on, options) => {
               $.ui.toast(copied.isCopied ? 'Postcard copied to the clipboard!' : 'Could not copy the postcard here.')
             }}
           />
+          <Button key="office" plain label={desks.inside ? 'Leave office' : `Office (${desks.staff})`} dimColor onPress={() => act($, { kind: 'office' })} />
           {place.open ? (
             <Button key="museum" plain label={place.inside ? 'Leave museum' : 'Museum tour'} dimColor onPress={() => act($, { kind: 'museum' })} />
           ) : null}
@@ -437,7 +447,17 @@ export const register: Register = (on, options) => {
         </Box>
       ))
       : [<Text dimColor>No requests today.</Text>]
+    const officeRows = panels?.office.length
+      ? panels.office.map(a => (
+        <Box flexDirection="row" columnGap={1}>
+          <Box width={NAME_WIDTH + 2} flexShrink={0}><Text bold color={a.color}>{a.name}</Text></Box>
+          <Box width={8} flexShrink={0}><Text color={DESK_STATUS[a.status][1]}>{DESK_STATUS[a.status][0]}</Text></Box>
+          <Text dimColor wrap="truncate">{`${a.repo || 'no repo'}${a.branch ? ` · ${a.branch}` : ''}${a.tool ? ` · ${a.tool}` : ''}`}</Text>
+        </Box>
+      ))
+      : [<Text dimColor>Nobody at work: no Claude Code sessions are open.</Text>]
     const villageRows = panels ? [
+      header('Office', 'one apprentice per open session'), ...officeRows,
       header('Requests'), ...requestRows,
       header('Projects', 'fund them at the plaza board'), ...projectRows,
       header('Museum', `${panels.museum.sections.reduce((n, s) => n + s.have, 0)} pieces`), ...museumRows,

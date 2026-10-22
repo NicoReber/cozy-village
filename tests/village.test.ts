@@ -7,7 +7,8 @@ import {
 import {
   act, api, bye, createHost, finishJob, forget, hello, LEASE_MS, memoryReport, pane, saveOf, SESSION_STALE_MS, sessionEvent, takeJob, takePostcard, tickHost, WISH_WAIT_MS,
 } from '../hooks/host'
-import { CHORES, mapPayload, statePayload } from '../hooks/web'
+import { DESKS, deskStatus, OH, seat } from '../hooks/office'
+import { CHORES, infoPayload, mapPayload, statePayload } from '../hooks/web'
 
 const PANE = {
   plugin: 'cozy-village',
@@ -743,4 +744,81 @@ test('a pane gets the picture, the chat and only the headlines it has not seen',
   forget(h)
   expect(h.world.friendship.tom).toBe(0)
   expect(h.world.diaryDue).toEqual([])
+})
+
+test('the office stands north of the plaza, and Claude can walk in and out', async () => {
+  const w = createWorld()
+  w.events = []
+  w.requests = []
+  expect(mapPayload(w).rows[5][50]).toBe('d')
+  expect(parseActions('[{"do":"office"}]')).toEqual([{ do: 'office' }])
+  enqueue(w, [{ do: 'office' }])
+  run(w, 3000)
+  expect(w.scene).toBe('office')
+  expect(w.player.bubble?.text).toContain('Nobody at work')
+  expect(mapPayload(w).scene).toBe('office')
+  expect(frame(w, 80).length).toBe(80 * ROWS * 3)
+  enqueue(w, [{ do: 'fish' }])
+  run(w, 3000)
+  expect(w.scene).toBe('village')
+})
+
+test('every session gets a desk and an apprentice who mirrors its work', async () => {
+  const h = createHost(undefined)
+  hello(h, 's-1', { repo: 'cozy-village', branch: 'main' }, 0)
+  hello(h, 's-2', { repo: 'api-server', branch: 'fix/login' }, 0)
+  const [a, b] = h.world.office.staff
+  expect(h.world.office.staff.length).toBe(2)
+  expect(a.desk).not.toBe(b.desk)
+  expect(a.name).not.toBe(b.name)
+  expect(a.bubble?.text).toContain('cozy-village')
+  for (let i = 0; i < 200; i++) tickHost(h, 0)
+  expect({ x: a.x, y: a.y }).toEqual(seat(a.desk))
+  sessionEvent(h, 's-1', { type: 'tool', tool: 'Edit' }, 0)
+  expect(a.status).toBe('working')
+  expect(deskStatus(h.world.office)[a.desk]).toBe('working')
+  expect(summary(h.world, 'hi')).toContain("I'm busy on cozy-village (main), writing code.")
+  sessionEvent(h, 's-1', { type: 'turn', seconds: 40, outcome: 'answer' }, 0)
+  expect(a.status).toBe('done')
+  sessionEvent(h, 's-2', { type: 'tests', passed: false }, 0)
+  expect(b.status).toBe('error')
+  expect(infoPayload(h.world).office.map(o => o.status)).toEqual(['done', 'error'])
+  bye(h, 's-1')
+  expect(a.leaving).toBe(true)
+  for (let i = 0; i < 200; i++) tickHost(h, 0)
+  expect(h.world.office.staff.map(s => s.id)).toEqual(['s-2'])
+  hello(h, 's-3', { repo: 'docs', branch: '' }, 0)
+  expect(h.world.office.staff.find(s => s.id === 's-3')?.desk).toBe(a.desk)
+})
+
+test('Claude visits the apprentices, who tell what they are working on', async () => {
+  const h = createHost(undefined)
+  h.world.events = []
+  h.world.requests = []
+  hello(h, 's-1', { repo: 'cozy-village', branch: 'main' }, 0)
+  sessionEvent(h, 's-1', { type: 'tool', tool: 'Bash' }, 0)
+  act(h, { kind: 'office' }, 0)
+  for (let i = 0; i < 3000 && (h.world.queue.length || h.world.current); i++) tickHost(h, 0)
+  expect(h.world.scene).toBe('office')
+  const name = h.world.office.staff[0].name
+  expect(h.chat.some(l => l.who === name && l.text === "I'm busy on cozy-village (main), running commands.")).toBe(true)
+  const state = statePayload(h.world, h.chat)
+  expect(state.movers.map(m => m.k)).toEqual(['app:s-1', 'me'])
+  expect(state.desks?.[h.world.office.staff[0].desk]).toBe('working')
+  expect(mapPayload(h.world).rows.length).toBe(OH)
+  // idle, Claude stays in the office, dropping by the desks, until told to leave
+  for (let i = 0; i < 3000; i++) tickHost(h, 0)
+  expect(h.world.scene).toBe('office')
+  act(h, { kind: 'office' }, 0)
+  for (let i = 0; i < 3000 && (h.world.queue.length || h.world.current); i++) tickHost(h, 0)
+  expect(h.world.scene).toBe('village')
+})
+
+test('with every desk taken, a new apprentice stands by the wall', async () => {
+  const h = createHost(undefined)
+  for (let i = 0; i < DESKS.length + 1; i++) hello(h, `s-${i}`, { repo: `repo-${i}`, branch: '' }, 0)
+  const extra = h.world.office.staff[DESKS.length]
+  expect(extra.desk).toBeLessThan(0)
+  for (let i = 0; i < 300; i++) tickHost(h, 0)
+  expect({ x: extra.x, y: extra.y }).toEqual(seat(extra.desk))
 })

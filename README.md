@@ -27,6 +27,7 @@ You steer it by typing wishes like *"buy pumpkin seeds and plant them"* or *"bri
   - Community projects that change the map: benches, a riverside park, street lamps, a fishing pier, a museum, a bomb factory that blows up now and then (Bruno patches it up afterwards), and an AI data center run on three fixed bikes: villagers (and Claude, with `pedal`) keep its battery up, a charged one is kind and computes Bells and apples, and one that runs flat turns evil and blows up the bomb factory.
   - A walkable museum with a curator owl, plus bug catching, digging for fossils, fish records, letters by mail and villager requests.
 - **One village for all your sessions**: every Claude Code session on the computer joins the same village, whether its pane is open or not.
+- **The office**: a building north of the plaza with a desk and an apprentice for every open session. The apprentice walks in when the session starts, types while it runs tools, cheers when a turn is done, sighs at errors and failing tests, fetches coffee when idle and walks out when the session ends. Send Claude in with **Office** (or a wish) and he chats with each apprentice about their repo and branch; he stays until a wish or **Leave office** takes him out.
 - **It notices your real work**:
   - While Claude Code runs tools in any of your sessions, the village Claude hammers, reads or stokes a forge to match.
   - Finished turns get a cheer, passing tests a rainbow, failing tests a little rain cloud.
@@ -83,6 +84,7 @@ To load it in every session without installing, set `CLAUDE_CODE_PLUGIN_DIRS` to
 | Tabs: **Chat · Memories · Village** | The chat log, what everyone remembers, and projects / museum / requests |
 | **Quick** bar | One-click chores: fish, chop wood, water, harvest, sell, read mail (no model call) |
 | **Postcard** | Copies the scene to the clipboard |
+| **Office** / **Leave office** | Sends Claude into the office to visit the apprentices, or back out |
 | **Museum tour** | Walk through the museum once it is built |
 | **Village info** (browser) | Requests, project progress, museum collection and memories |
 | **Open in my browser** | Desktop app: opens the browser view (`/village web` anywhere) |
@@ -130,6 +132,7 @@ hooks/
   museum.ts      the museum interior and the curator's lines
   web.ts         what the browser view is sent: the map and the moving parts
   host.ts        the shared village the server runs: sessions, panes and the model jobs it hands out
+  office.ts      the office's interior and its apprentices, one per session
 types/index.d.ts the plugin's state contract
 web/             server.mjs (the village server every session connects to), launch.mjs (starts it detached),
                  index.html and village.js (the browser view's canvas renderer)

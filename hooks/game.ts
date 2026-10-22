@@ -8,6 +8,8 @@ import {
 } from './catalog'
 import type { BugHabitat, CropKind, ProjectId, Season } from './catalog'
 import { CURATOR_SPOT, ENTRANCE, FACTS, hint, IH, indoorPath, IW, museumCell, viewSpot } from './museum'
+import { deskStatus, LOOKS, OFFICE_ENTRANCE, officeCell, officePath, OH, OW, runOffice, visitSpot, workLine } from './office'
+import type { Office } from './office'
 
 export const W = 96
 export const H = 24
@@ -91,6 +93,7 @@ export type Action =
   | { do: 'tour' }
   | { do: 'look'; item: string }
   | { do: 'exit' }
+  | { do: 'office' }
   | { do: Exclude<WorkKind, 'gift' | 'plant' | 'shop' | 'cook' | 'fund' | 'donate' | 'place'>; count?: number }
 
 export type EventKind = 'rain' | 'merchant' | 'festival' | 'lost' | 'tournament' | 'meteor' | 'birthday' | 'season'
@@ -125,6 +128,8 @@ type Step =
   | { do: '_exit' }
   | { do: '_iwalk'; x: number; y: number }
   | { do: '_look'; piece: string }
+  | { do: '_office' }
+  | { do: '_chat'; id: string }
 
 export type Memory = { day: number; time: string; text: string; kind: 'event' | 'fact' | 'diary' }
 
@@ -191,8 +196,10 @@ export type World = {
   mail: Letter[]
   /** The friendship tier each villager has written to Claude about. */
   milestones: Record<string, number>
-  /** Where Claude is: out in the village, or inside the museum (`inside` is the position there). */
-  scene: 'village' | 'museum'
+  /** Where Claude is: out in the village, or inside the museum or the office (`inside` is the position there). */
+  scene: 'village' | 'museum' | 'office'
+  /** The office's apprentices, one per connected Claude Code session; live, never saved. */
+  office: Office
   inside: Mover
   curator: Mover
   /** Headlines for the host to show as toasts. */
@@ -216,12 +223,12 @@ const PLACE_SPOTS: Record<string, Pt> = {
   orchard: { x: 23, y: 5 }, flowers: { x: 66, y: 7 }, plaza: { x: 50, y: 11 }, cafe: { x: 40, y: 15 },
   river: { x: 55, y: 13 }, bridge: { x: 61, y: 9 }, workshop: { x: 84, y: 6 }, florist: { x: 67, y: 6 },
   tomhouse: { x: 20, y: 15 }, piphouse: { x: 82, y: 15 }, board: { x: 47, y: 12 }, museum: { x: 27, y: 15 }, club: { x: 88, y: 15 },
-  factory: { x: 68, y: 15 }, datacenter: { x: 37, y: 19 },
+  factory: { x: 68, y: 15 }, datacenter: { x: 37, y: 19 }, office: { x: 50, y: 6 },
 }
 const APPLE_TREES = [[20, 3], [23, 2], [26, 4], [21, 6], [25, 7], [28, 2], [88, 20], [91, 21], [86, 13]]
 const TREES = [
   [3, 20], [5, 21], [7, 20], [9, 22], [11, 21], [13, 20], [4, 22], [15, 22], [89, 19], [92, 20], [93, 22],
-  [34, 7], [47, 4], [53, 3], [74, 4], [90, 13], [27, 12], [33, 21], [45, 21], [74, 14], [62, 13], [2, 4], [93, 6],
+  [34, 7], [74, 4], [90, 13], [27, 12], [33, 21], [45, 21], [74, 14], [62, 13], [2, 4], [93, 6],
 ]
 const FLOWERS = [
   [62, 6], [63, 7], [65, 6], [64, 7], [69, 6], [70, 7], [72, 6], [73, 7], [71, 6],
@@ -287,6 +294,7 @@ export function createWorld(): World {
   building(63, 2, 71, 67, 0xd81b60, 0xfce4ec, 'FLOWERS'); rect(67, 6, 67, 8, 'path')
   building(80, 2, 89, 84, 0x6d4c41, 0xefebe9, 'WORKSHOP'); rect(84, 6, 84, 8, 'path')
   building(79, 11, 85, 82, 0xef6c00, 0xfff8e1); rect(82, 15, 82, 17, 'path')
+  building(47, 2, 54, 50, 0x455a64, 0xeceff1, 'OFFICE')
 
   // farm, plaza, pond
   rect(5, 11, 12, 15, 'fence'); rect(6, 12, 11, 14, 'soil'); set(8, 15, 'path'); rect(8, 16, 8, 17, 'path')
@@ -319,7 +327,7 @@ export function createWorld(): World {
     echo: null, reply: null, askMore: null, replied: {}, adults: false, cheer: 0, cloud: 0, boom: 0, rubble: 0, dc: { battery: 80, evil: false, duty: false, warned: false, locked: false }, rainbow: 0, flash: 0, events: [], weather: 'clear', pickups: [], announce: [],
     projects: Object.fromEntries(Object.keys(PROJECTS).map(id => [id, { bells: 0, items: {}, done: false }])) as Record<ProjectId, Project>,
     museum: [], decor: [], requests: [], critters: [], digSpots: [], mail: [], milestones: {},
-    scene: 'village', inside: { ...ENTRANCE, path: [] }, curator: { ...CURATOR_SPOT, path: [] },
+    scene: 'village', inside: { ...ENTRANCE, path: [] }, curator: { ...CURATOR_SPOT, path: [] }, office: { staff: [] },
     tick: 0, thinking: false, label: 'strolling', log: [],
   }
   for (const [name, spot] of Object.entries(PLACE_SPOTS)) w.places[name] = nearestWalkable(w, spot)
@@ -575,7 +583,7 @@ export const systemPrompt = (w: World) => (w.adults ? `${SYSTEM}\n${CLUB_RULES}`
 export const SYSTEM = `You are Claude, a cheerful villager in a cozy Animal-Crossing / Stardew-Valley style village.
 The player types a wish; you answer ONLY with a JSON array of actions (max 12), no prose, no code fence.
 Actions:
-{"do":"walk","to":"home|shop|farm|pond|orchard|flowers|plaza|cafe|river|bridge|workshop|florist|tomhouse|piphouse|board|museum|datacenter|tom|rosa|bruno|pip|mabel|mochi"}
+{"do":"walk","to":"home|shop|farm|pond|orchard|flowers|plaza|cafe|river|bridge|workshop|florist|tomhouse|piphouse|board|museum|datacenter|office|tom|rosa|bruno|pip|mabel|mochi"}
 {"do":"say","text":"<= 60 chars, shown in your speech bubble"}
 {"do":"npc_say","who":"tom|rosa|bruno|pip|mabel|mochi","text":"<= 60 chars, what that villager answers, in their own voice"}
 {"do":"plant","crop":"turnip|carrot|strawberry|pumpkin"}  plants on every empty farm soil; turnip seeds are free, other seeds come from the shop
@@ -599,7 +607,8 @@ Actions:
 {"do":"mail"}    goes home and reads the letters in the mailbox (villagers often send gifts)
 {"do":"tour"}    goes inside the museum (once built) and walks past every donated piece while Hoot the curator explains it
 {"do":"look","item":"<museum piece>"}   goes inside the museum to one case; for a missing piece Hoot tells where to find it
-{"do":"enter"} / {"do":"exit"}   go into / out of the museum (other actions leave it by themselves)
+{"do":"enter"} / {"do":"exit"}   go into / out of the museum (other actions leave it by themselves); exit also leaves the office
+{"do":"office"}  goes into the office, where an apprentice works at a desk for every Claude Code session the player has open, and chats with each about their work
 {"do":"pet"}     pets Mochi the cat
 {"do":"sleep"}   goes home and sleeps until the next morning
 {"do":"wait","seconds":3}
@@ -634,13 +643,14 @@ export function summary(w: World, wish: string): string {
       + `Now ${n.asleep ? 'asleep at home' : `near the ${where(n)}`}, ${dist(n, w.player)} steps away.\n${memoryText(w, v.id, 3)}`
   })
   return [
-    `Day ${w.day}, ${clock(w)}. ${w.scene === 'museum' ? 'You are inside the museum.' : `You are near the ${where(w.player)}.`} Bells: ${w.bells}. Bag: ${bag}.`,
+    `Day ${w.day}, ${clock(w)}. ${w.scene === 'museum' ? 'You are inside the museum.' : w.scene === 'office' ? 'You are inside the office.' : `You are near the ${where(w.player)}.`} Bells: ${w.bells}. Bag: ${bag}.`,
     `## Season and nature\n${natureText(w)}`,
     `Farm: ${crops.length} crops${kinds ? ` (${kinds})` : ''}, ${ripe} ripe, ${dry} need water, ${empty} empty soil. Apple trees with fruit: ${apples}.`,
     `## What Bells and items are for\n${economyText(w)}`,
     `## Today's events\n${eventsText(w)}`,
     `## Your memory\n${memoryText(w, 'claude', 12)}`,
     `## Villagers\n${people.join('\n')}`,
+    `## The office\n${officeText(w)}`,
     `The player wishes: ${wish}`,
   ].join('\n')
 }
@@ -682,7 +692,7 @@ export function parseActions(text: string): Action[] {
     else if (kind === 'pedal') out.push({ do: 'pedal' })
     else if (kind === 'lock' || kind === 'unlock') out.push({ do: kind })
     else if (kind === 'mail') out.push({ do: 'mail' })
-    else if (kind === 'enter' || kind === 'tour' || kind === 'exit') out.push({ do: kind })
+    else if (kind === 'enter' || kind === 'tour' || kind === 'exit' || kind === 'office') out.push({ do: kind })
     else if (kind === 'look' && typeof o.item === 'string' && MUSEUM_PIECES.includes(o.item)) out.push({ do: 'look', item: o.item })
     else if (kind === 'place' && typeof o.item === 'string' && o.item in DECOR) {
       out.push({ do: 'place', item: o.item, at: typeof o.at === 'string' && o.at in PLACE_SPOTS ? o.at : undefined })
@@ -780,15 +790,21 @@ function expand(w: World, a: Step): Step[] {
     return list
   }
   const none = (text: string): Step[] => [{ do: 'say', text }]
-  const leave: Step[] = [{ do: '_iwalk', ...ENTRANCE }, { do: '_exit' }]
+  const leave: Step[] = [{ do: '_iwalk', ...(w.scene === 'office' ? OFFICE_ENTRANCE : ENTRANCE) }, { do: '_exit' }]
   const goIn: Step[] = w.scene === 'museum' ? [] : [go(w.places.museum), { do: '_enter' }]
-  if (w.scene === 'museum' && !INDOOR.has(a.do)) return [...leave, a]
+  if (w.scene !== 'village' && !(w.scene === 'office' ? IN_OFFICE : INDOOR).has(a.do)) return [...leave, a]
   switch (a.do) {
+    case 'office': {
+      const staff = w.office.staff.filter(s => !s.leaving)
+      const steps: Step[] = staff.flatMap(s => [{ do: '_iwalk', ...visitSpot(s.desk) } as Step, { do: '_chat', id: s.id } as Step])
+      if (!staff.length) steps.push({ do: 'say', text: 'Nobody at work - no sessions are open right now.' })
+      return [...(w.scene === 'office' ? [] : [go(w.places.office), { do: '_office' } as Step]), ...steps]
+    }
     case 'enter': {
       if (!w.projects.museum.done) return none("There's no museum yet - we could fund one at the plaza board.")
       return goIn
     }
-    case 'exit': return w.scene === 'museum' ? leave : []
+    case 'exit': return w.scene !== 'village' ? leave : []
     case 'tour': {
       if (!w.projects.museum.done) return none("There's no museum yet - we could fund one at the plaza board.")
       const shown = MUSEUM_PIECES.filter(m => w.museum.includes(m))
@@ -1183,8 +1199,35 @@ function runPlayer(w: World) {
       w.current = undefined
       return true
     }
+    case '_office': {
+      w.scene = 'office'
+      w.inside = { ...OFFICE_ENTRANCE, path: [] }
+      const busy = w.office.staff.filter(a => a.status === 'working').length
+      w.log.push({ who: 'event', text: `Claude stepped into the office: ${w.office.staff.length} apprentice${w.office.staff.length === 1 ? '' : 's'}, ${busy} busy.` })
+      w.label = 'at the office'
+      remember(w, 'claude', 'I visited the apprentices at the office.')
+      w.current = undefined
+      return true
+    }
+    case '_chat': {
+      const a = w.office.staff.find(x => x.id === s.id)
+      if (!a || a.leaving) { w.current = undefined; return true }
+      if (!s.started) {
+        s.started = true
+        s.left = 50
+        w.label = `visiting ${a.name}`
+        sayPlayer(w, pick([`How's it going, ${a.name}?`, `Hi ${a.name}! What are you up to?`, `Need anything, ${a.name}?`]))
+      }
+      if (s.left === 32) {
+        const line = workLine(a)
+        a.bubble = { text: line, ticks: 32 }
+        w.log.push({ who: a.name, text: line })
+      }
+      if (--s.left! <= 0) w.current = undefined
+      return true
+    }
     case '_iwalk': {
-      if (!s.started) { s.started = true; w.inside.path = indoorPath(w.inside, s) }
+      if (!s.started) { s.started = true; w.inside.path = (w.scene === 'office' ? officePath : indoorPath)(w.inside, s) }
       if (w.inside.path.length) { if (w.tick % 2 === 0) moveAlong(w.inside) } else w.current = undefined
       return true
     }
@@ -1263,6 +1306,17 @@ function idle(w: World) {
   w.idle += 1
   if (w.thinking || w.idle < 55) return
   if (w.scene === 'museum') { w.idle = 0; w.queue.push({ do: 'say', text: 'What a lovely museum.' }, { do: 'exit' }); return }
+  // the office keeps Claude until a wish or the Leave office button takes him out; meanwhile he drops by a desk
+  if (w.scene === 'office') {
+    w.idle = 0
+    w.label = 'at the office'
+    const staff = w.office.staff.filter(a => !a.leaving)
+    if (staff.length && Math.random() < 0.5) {
+      const a = pick(staff)
+      w.queue.push({ do: '_iwalk', ...visitSpot(a.desk) }, { do: '_chat', id: a.id })
+    }
+    return
+  }
   w.idle = 0
   const hour = w.minutes / 60
   if (hour >= 23 || hour < 5) { w.queue.push({ do: 'say', text: pick(NIGHT_LINES) }, { do: 'sleep' }); return }
@@ -1635,6 +1689,7 @@ export function step(w: World) {
   runFactory(w)
   runDataCenter(w)
   runEcho(w)
+  runOffice(w.office, w.tick)
   if (w.scene === 'museum') {
     const h = w.curator
     if (h.bubble && --h.bubble.ticks <= 0) h.bubble = undefined
@@ -1644,6 +1699,16 @@ export function step(w: World) {
       if (near) { h.x = near[0].x; h.y = near[0].y }
     }
   }
+}
+
+/** Actions that can happen inside the office without leaving it. */
+const IN_OFFICE = new Set<string>(['say', 'npc_say', 'wait', 'remember', 'office', 'exit', '_iwalk', '_office', '_chat', '_exit'])
+
+/** Who works at the office and on what, for the planner. */
+function officeText(w: World): string {
+  const staff = w.office.staff.filter(a => !a.leaving)
+  if (!staff.length) return 'Nobody is at work: no Claude Code sessions are open.'
+  return `One apprentice per open Claude Code session of the player's:\n${staff.map(a => `- ${a.name}: ${workLine(a)}`).join('\n')}`
 }
 
 /** Actions that can happen inside the museum without leaving it. */
@@ -2738,12 +2803,17 @@ export function frame(w: World, cols: number): Uint32Array {
     for (const c of s) put(cx++, y, ch(c), fg, bg)
   }
   const inMuseum = w.scene === 'museum'
-  const me = inMuseum ? w.inside : w.player
+  const inOffice = w.scene === 'office'
+  /** Inside a building: no weather, no sky, and the village's people stay outside. */
+  const indoor = inMuseum || inOffice
+  const me = indoor ? w.inside : w.player
   const donated = new Set(w.museum)
-  const camX = inMuseum
-    ? (IW <= cols ? -Math.floor((cols - IW) / 2) : Math.max(0, Math.min(IW - cols, me.x - Math.floor(cols / 2))))
+  const desks = deskStatus(w.office)
+  const [roomW, roomH] = inOffice ? [OW, OH] : [IW, IH]
+  const camX = indoor
+    ? (roomW <= cols ? -Math.floor((cols - roomW) / 2) : Math.max(0, Math.min(roomW - cols, me.x - Math.floor(cols / 2))))
     : Math.max(0, Math.min(W - cols, w.player.x - Math.floor(cols / 2)))
-  const camY = inMuseum ? -Math.floor((VIEW_H - IH) / 2) : Math.max(0, Math.min(H - VIEW_H, w.player.y - Math.floor(VIEW_H / 2)))
+  const camY = indoor ? -Math.floor((VIEW_H - roomH) / 2) : Math.max(0, Math.min(H - VIEW_H, w.player.y - Math.floor(VIEW_H / 2)))
   const isRaining = w.weather === 'rain'
   const l = light(w.minutes).map(v => (isRaining ? v * 0.82 : v)) as [number, number, number]
   const festival = !!active(w, 'festival')
@@ -2759,6 +2829,7 @@ export function frame(w: World, cols: number): Uint32Array {
       const mx = sx + camX
       const my = y + camY
       if (inMuseum) { const [c, fg, bg] = museumCell(mx, my, donated, w.tick); put(sx, y + 1, c, fg, bg); continue }
+      if (inOffice) { const [c, fg, bg] = officeCell(mx, my, desks, w.tick); put(sx, y + 1, c, fg, bg); continue }
       if (mx >= W) { put(sx, y + 1, 32, DEFAULT, 0x1b5e20); continue }
       const [c, fg, raw] = tileCell(w, mx, my)
       const bg = shaded(w, mx, my) ? scale(raw, 0.84) : raw
@@ -2787,9 +2858,11 @@ export function frame(w: World, cols: number): Uint32Array {
   }
 
   const screen = (m: Pt) => ({ sx: m.x - camX, sy: m.y - camY + 1 })
-  const indoors = new Set<Pt>([w.inside, w.curator])
+  const staff = new Set<Pt>(w.office.staff)
+  /** The scene a mover is in: Claude's indoor self is in whichever building Claude is in. */
+  const sceneOf = (m: Pt) => (m === w.inside ? w.scene : m === w.curator ? 'museum' : staff.has(m) ? 'office' : 'village')
   const visible = (m: Pt) => {
-    if (inMuseum !== indoors.has(m)) return false
+    if (sceneOf(m) !== w.scene || (m === w.inside && !indoor)) return false
     const { sx, sy } = screen(m)
     return sx >= 0 && sx < cols && sy >= 1 && sy <= VIEW_H
   }
@@ -2804,7 +2877,7 @@ export function frame(w: World, cols: number): Uint32Array {
     if (pu.kind === 'lost') put(sx, sy, ch(w.tick % 8 < 5 ? '?' : ' '), 0xffeb3b, bgAt(sx, sy))
     else put(sx, sy, ch(w.tick % 6 < 3 ? '+' : 'x'), 0xfff59d, bgAt(sx, sy))
   }
-  if (active(w, 'meteor') && !inMuseum) {
+  if (active(w, 'meteor') && !indoor) {
     for (let k = 0; k < 3; k++) {
       const phase = (w.tick + k * 13) % 24
       const x0 = noise(k, Math.floor((w.tick + k * 13) / 24), 3) % cols
@@ -2815,7 +2888,7 @@ export function frame(w: World, cols: number): Uint32Array {
       }
     }
   }
-  if (!inMuseum && !isRaining) {
+  if (!indoor && !isRaining) {
     const phase = Math.floor(w.tick / 6) % 6
     const puff = { x: 10 + (phase > 2 ? 1 : 0), y: 1 }
     if (visible(puff) && phase !== 5) {
@@ -2835,7 +2908,7 @@ export function frame(w: World, cols: number): Uint32Array {
     if (glow && w.tick % 10 < 3) continue
     put(sx, sy, ch(BUGS[c.kind].glyph), c.color, bgAt(sx, sy))
   }
-  if (!inMuseum && !isNight && season(w) !== 'winter' && Math.floor(w.tick / 240) % 3 === 0) {
+  if (!indoor && !isNight && season(w) !== 'winter' && Math.floor(w.tick / 240) % 3 === 0) {
     const t = w.tick % 240
     for (let k = 0; k < 3; k++) {
       const bx = Math.floor((t / 240) * (cols + 10)) - 5 - k * 2
@@ -2844,7 +2917,7 @@ export function frame(w: World, cols: number): Uint32Array {
       if (bx >= 0 && bx < cols && under !== 'wall' && under !== 'roof') put(bx, by, ch('v'), 0x37474f, bgAt(bx, by))
     }
   }
-  if (w.adults && w.projects.club.done && isNight && !inMuseum) {
+  if (w.adults && w.projects.club.done && isNight && !indoor) {
     for (let k = 0; k < 3; k++) {
       const rise = (w.tick + k * 9) % 27
       const note = { x: 87 + ((k * 2 + Math.floor((w.tick + k * 9) / 27)) % 4), y: 10 - Math.floor(rise / 9) }
@@ -2853,7 +2926,7 @@ export function frame(w: World, cols: number): Uint32Array {
       put(sx, sy, ch(k % 2 ? '♫' : '♪'), [0xff4081, 0xb388ff, 0x80d8ff][k], bgAt(sx, sy))
     }
   }
-  if (w.projects.factory.done && !inMuseum) {
+  if (w.projects.factory.done && !indoor) {
     if (w.rubble > 0) {
       for (let y = 11; y <= 14; y++) {
         for (let x = 65; x <= 71; x++) {
@@ -2898,7 +2971,7 @@ export function frame(w: World, cols: number): Uint32Array {
       }
     }
   }
-  if (w.projects.datacenter.done && !inMuseum) {
+  if (w.projects.datacenter.done && !indoor) {
     // the AI data center: a battery gauge on the roof, a face that shows its mood, and blinking server lights
     const mood = dcMood(w)
     const level = Math.ceil(w.dc.battery / 20)
@@ -2921,7 +2994,7 @@ export function frame(w: World, cols: number): Uint32Array {
       put(sx, sy, ch(on ? '•' : '·'), mood === 'evil' ? 0xff1744 : on ? 0x69f0ae : 0x37474f, 0x263238)
     }
   }
-  if (party === 'summer' && isNight && !inMuseum) {
+  if (party === 'summer' && isNight && !indoor) {
     for (let k = 0; k < 2; k++) {
       const cycle = Math.floor((w.tick + k * 17) / 30)
       const phase = (w.tick + k * 17) % 30
@@ -2946,12 +3019,11 @@ export function frame(w: World, cols: number): Uint32Array {
   for (const v of VILLAGERS) sprite(w.npcs[v.id], '☻', v.color)
   const working = w.current?.do === '_work' || (!!w.echo && !w.queue.length && !w.current)
   sprite(w.player, working && w.tick % 4 < 2 ? '☻' : '☺', 0xffeb3b)
-  if (inMuseum) {
-    sprite(w.curator, 'Ö', 0xbcaaa4)
-    sprite(w.inside, '☺', 0xffeb3b)
-  }
+  if (inMuseum) sprite(w.curator, 'Ö', 0xbcaaa4)
+  if (inOffice) for (const a of w.office.staff) sprite(a, a.status === 'working' && w.tick % 4 < 2 ? '☺' : '☻', LOOKS[a.look].shirt)
+  if (indoor) sprite(w.inside, '☺', 0xffeb3b)
 
-  if (!inMuseum && (w.cheer > 0 || w.cloud > 0) && visible(w.player)) {
+  if (!indoor && (w.cheer > 0 || w.cloud > 0) && visible(w.player)) {
     const { sx, sy } = screen(w.player)
     if (w.cheer > 0) {
       for (let k = 0; k < 6; k++) {
@@ -2975,6 +3047,7 @@ export function frame(w: World, cols: number): Uint32Array {
   const thinkingBubble = w.thinking ? { text: ['.  ', '.. ', '...'][Math.floor(w.tick / 3) % 3] + ' hmm', ticks: 1 } : undefined
   ask(me, thinkingBubble ?? w.player.bubble, 0xc9a227, 'Claude', 0)
   if (inMuseum) ask(w.curator, w.curator.bubble, 0xbcaaa4, 'Hoot', 1)
+  if (inOffice) for (const a of w.office.staff) ask(a, a.bubble, LOOKS[a.look].shirt, a.name, 1)
   for (const v of VILLAGERS) ask(w.npcs[v.id], w.npcs[v.id].bubble, v.color, w.npcs[v.id].bubble?.text === 'zZ' ? undefined : v.name, 1)
   if (w.merchant) ask(w.merchant, w.merchant.bubble, 0xffb300, 'Kiki', 1)
   ask(w.mochi, w.mochi.bubble, 0xb0a0a0, undefined, 2)
@@ -3060,7 +3133,7 @@ export function frame(w: World, cols: number): Uint32Array {
     }
   }
 
-  if (w.rainbow > 0 && !inMuseum) {
+  if (w.rainbow > 0 && !indoor) {
     const colors = [0xef5350, 0xffa726, 0xffee58, 0x66bb6a, 0x42a5f5, 0xab47bc]
     const reach = Math.min(cols, Math.floor(((50 - w.rainbow) / 20) * cols))
     for (let x = 0; x < reach; x++) put(x, 1 + Math.floor(Math.abs(x - cols / 2) / (cols / 4)), ch('▀'), colors[Math.floor(x / 3) % 6], bgAt(x, 1 + Math.floor(Math.abs(x - cols / 2) / (cols / 4))))
@@ -3078,8 +3151,10 @@ export function frame(w: World, cols: number): Uint32Array {
   const happening = eventLabels(w)
   const seasonName = `${season(w)[0].toUpperCase()}${season(w).slice(1)} ${seasonDay(w)}`
   const sections = Object.entries(MUSEUM).map(([k, v]) => `${k} ${v.filter(m => donated.has(m)).length}/${v.length}`).join(' · ')
+  const busy = w.office.staff.filter(a => a.status === 'working').length
   const left = inMuseum
     ? ` MUSEUM  ${sections}   ${clock(w)}`
+    : inOffice ? ` OFFICE  ${w.office.staff.length} at their desks · ${busy} busy   ${clock(w)}`
     : ` ${hour >= 6 && hour < 19 ? '☼' : '☾'} ${seasonName} · Day ${w.day}  ${clock(w)}   ${w.bells} Bells${happening ? `   ★ ${happening}` : ''}`
   text(0, 0, left.slice(0, cols), hudFg, hudBg)
   const status = w.thinking ? 'thinking…' : w.label
