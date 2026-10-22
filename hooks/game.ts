@@ -1837,6 +1837,8 @@ function react(w: World, e: VillageEvent, name: string) {
     birthday: [{ do: 'walk', to: e.who ?? 'plaza' }, { do: 'say', text: `Happy birthday, ${name}!` }],
     season: [{ do: 'say', text: `The ${SEASON_FESTIVALS[season(w)].name}! I can't miss it!` }, { do: 'walk', to: SEASON_FESTIVALS[season(w)].place }],
   }
+  // the office keeps Claude until the player sends him out: there he only remarks on the news
+  if (w.scene === 'office') { enqueue(w, plans[e.kind].filter(a => a.do === 'say')); return }
   enqueue(w, plans[e.kind])
 }
 
