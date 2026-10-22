@@ -12,6 +12,10 @@ You steer it by typing wishes like *"buy pumpkin seeds and plant them"* or *"bri
 
 ![The browser view through the seasons: a spring morning at Claude's house, dusk on the lamp-lit plaza, autumn rain by the river and the first snow at the shop, in top-down pixel art](docs/browser.gif)
 
+**The office: an apprentice for every session**
+
+![The office in the browser: apprentices type at their desks, a new one walks in through the door, the screens turn green, gold and red as their sessions work, finish and fail, and Claude drops by each desk to chat](docs/office.gif)
+
 ## What's in the village
 
 - **Claude and five neighbours**: Tom the fisherman, Rosa the florist, Bruno the carpenter, Pip the kid and Mabel from the café, plus Mochi the cat.
@@ -26,8 +30,10 @@ You steer it by typing wishes like *"buy pumpkin seeds and plant them"* or *"bri
   - Crops and seeds, cooking at the café, decorations.
   - Community projects that change the map: benches, a riverside park, street lamps, a fishing pier, a museum, a bomb factory that blows up now and then (Bruno patches it up afterwards), and an AI data center run on three fixed bikes: villagers (and Claude, with `pedal`) keep its battery up, a charged one is kind and computes Bells and apples, and one that runs flat turns evil and blows up the bomb factory.
   - A walkable museum with a curator owl, plus bug catching, digging for fossils, fish records, letters by mail and villager requests.
+- **One village for all your sessions**: every Claude Code session on the computer joins the same village, whether its pane is open or not.
+- **The office**: a building north of the plaza with a desk and an apprentice for every open session. The apprentice walks in when the session starts, types while it runs tools, cheers when a turn is done, sighs at errors and failing tests, fetches coffee when idle and walks out when the session ends. Send Claude in with **Office** (or a wish) and he chats with each apprentice about their repo and branch; he stays until a wish or **Leave office** takes him out.
 - **It notices your real work**:
-  - While Claude Code runs tools in your session, the village Claude hammers, reads or stokes a forge to match.
+  - While Claude Code runs tools in any of your sessions, the village Claude hammers, reads or stokes a forge to match.
   - Finished turns get a cheer, passing tests a rainbow, failing tests a little rain cloud.
 - **Postcards**: one click copies the current scene plus a caption to the clipboard.
 
@@ -45,12 +51,12 @@ browser instead, as a pixel-art canvas game:
 In the desktop app, `/village` shows the village's link with **Open in my browser** and **Copy link**. To keep it inside
 the app, open the link in the desktop app's Browser pane (Ctrl+Shift+B on Windows, Cmd+Shift+B on macOS). In any
 session, `/village web` opens it in your browser.
-The page is served by a small local server (`web/server.mjs`) that the mod starts for the session and stops with it.
-It listens on this computer's loopback address only, and the link carries a random key for that session.
+The page is served by the village's local server (`web/server.mjs`), the same one every session connects to.
+It listens on this computer's loopback address only, and the link carries a random key for that server.
 
 ## Requirements
 
-Claude Code with function-hook plugins (mods). In the terminal the village is drawn in character cells and looks best in the fullscreen layout. The browser view needs [Node.js](https://nodejs.org) on the computer.
+Claude Code with function-hook plugins (mods), and [Node.js](https://nodejs.org) 22.18 or newer on the computer: the village runs in a small local Node server that runs the game's TypeScript directly. In the terminal the village is drawn in character cells and looks best in the fullscreen layout.
 
 ## Install
 
@@ -82,10 +88,11 @@ To load it in every session without installing, set `CLAUDE_CODE_PLUGIN_DIRS` to
 | Tabs: **Chat · Memories · Village** | The chat log, what everyone remembers, and projects / museum / requests |
 | **Quick** bar | One-click chores: fish, chop wood, water, harvest, sell, read mail (no model call) |
 | **Postcard** | Copies the scene to the clipboard |
+| **Office** / **Leave office** | Sends Claude into the office to visit the apprentices, or back out |
 | **Museum tour** | Walk through the museum once it is built |
 | **Village info** (browser) | Requests, project progress, museum collection and memories |
 | **Open in my browser** | Desktop app: opens the browser view (`/village web` anywhere) |
-| `/village stop` | Stops the village and its browser server; it keeps running until you do, even if you close the pane |
+| `/village stop` | Stops the village server for every session; it keeps running until you do (or until no session has been open for five minutes), even if you close the pane |
 | `/village memory` | Prints every character's memory |
 | `/village forget` | Wipes all memories and friendships |
 
@@ -109,11 +116,15 @@ The village calls the chosen model:
 - once per wish (the planning prompt is about 3–5k tokens)
 - once per in-game day for diaries, gossip, letters and the Gazette (a game day is about seven real minutes)
 
-Nothing else talks to a model.
+The village server cannot call a model itself, so one of the open sessions makes each call, with that session's model
+setting; a wish is answered by the session it was typed in. Nothing else talks to a model.
 
 ## Your save
 
-The village is saved through Claude Code's plugin store. Saving happens every in-game hour, and the save carries over between sessions.
+The village server saves the world to `cozy-village/world.json` in your Claude config folder (`~/.claude` unless
+`CLAUDE_CONFIG_DIR` says otherwise) every in-game hour and when it stops, and the save carries over between sessions.
+A save from an earlier version, kept in Claude Code's plugin store, moves there the first time the server starts.
+Next to it, `server.json` tells the sessions where the running server is.
 
 ## Development
 
@@ -124,10 +135,13 @@ hooks/
   catalog.ts     data tables: crops, shop, recipes, projects, bugs, fish, museum
   museum.ts      the museum interior and the curator's lines
   web.ts         what the browser view is sent: the map and the moving parts
+  host.ts        the shared village the server runs: sessions, panes and the model jobs it hands out
+  office.ts      the office's interior and its apprentices, one per session
 types/index.d.ts the plugin's state contract
-web/             the browser view: server.mjs (local server), index.html and village.js (canvas renderer)
+web/             server.mjs (the village server every session connects to), launch.mjs (starts it detached),
+                 index.html and village.js (the browser view's canvas renderer)
 tests/           claude plugin test suite
-tools/           scene scripts and renderers for docs/village.gif and docs/browser.gif
+tools/           scene scripts and renderers for docs/village.gif, docs/browser.gif and docs/office.gif
 ```
 
 ```
@@ -141,6 +155,7 @@ Cascadia Mono and Segoe UI Symbol fonts); it writes `docs/village.gif`.
 
 The browser animation is filmed from the real browser view replaying the scenes in `tools/browser_scene.ts`. Run
 `node tools/render_browser_gif.mjs` (Node 22+, Chrome, and Python with Pillow); it writes `docs/browser.gif`.
+`node tools/render_browser_gif.mjs office` films the office scene in `tools/office_scene.ts` and writes `docs/office.gif`.
 
 `.claude-plugin/types/` is generated by Claude Code when the plugin loads and is not committed.
 

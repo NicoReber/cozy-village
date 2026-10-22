@@ -1,9 +1,14 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
+import type { TestBody } from 'claude-code/testing'
 
 import {
-  answerMore, applyDiary, applyProject, BIKES, charge, chooseReply, createWorld, diaryPrompt, echoTests, echoTool, echoTurn, enqueue, explode, frame, KIND_AT, parseActions, offerReplies, remember, postcard, restore, ROWS, snapshot, step, summary, systemPrompt, ticker, VILLAGERS,
+  answerMore, applyDiary, applyProject, BIKES, charge, chooseReply, createWorld, diaryPrompt, echoTests, echoTool, echoTurn, encode, enqueue, explode, frame, KIND_AT, parseActions, offerReplies, remember, postcard, restore, ROWS, snapshot, step, summary, systemPrompt, ticker, VILLAGERS,
 } from '../hooks/game'
-import { CHORES, mapPayload, statePayload } from '../hooks/web'
+import {
+  act, api, bye, createHost, finishJob, forget, hello, LEASE_MS, memoryReport, pane, saveOf, SESSION_STALE_MS, sessionEvent, takeJob, takePostcard, tickHost, WISH_WAIT_MS,
+} from '../hooks/host'
+import { DESKS, deskStatus, doingLine, OH, seat } from '../hooks/office'
+import { CHORES, infoPayload, mapPayload, statePayload } from '../hooks/web'
 
 const PANE = {
   plugin: 'cozy-village',
@@ -11,6 +16,27 @@ const PANE = {
   requestId: 'cozy-village',
   props: { title: 'Village', isFocused: true, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 34 }, view: {} },
 } as const
+
+/**
+ * The shared village server in memory: server.json points at it and every fetch of the session reaches a
+ * Host through the same API web/server.mjs answers with.
+ */
+function villageServer(on: Parameters<TestBody>[1]) {
+  const h = createHost(undefined)
+  mock.env(on, { HOME: '/home/villager' })
+  on('fs.read', async (_, e, next) => (/cozy-village[\\/]server\.json$/.test(e.path) ? { value: JSON.stringify({ port: 4850, token: 'k', pid: 1 }) } : next(e)))
+  on('fs.exists', async (_, e, next) => (/cozy-village[\\/]world\.json$/.test(e.path) ? { value: true } : next(e)))
+  on('process.run', async (_, e, next) => (e.argv[0] === 'git' ? { value: { exitCode: 0, stdout: 'main\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } : next(e)))
+  on('http.fetch', async (_, e) => {
+    const url = new URL(e.url)
+    const answer = url.pathname === '/api/ping'
+      ? { status: 200, json: {} }
+      : api(h, { method: e.init?.method ?? 'GET', path: url.pathname, query: name => url.searchParams.get(name), body: e.init?.body ? JSON.parse(e.init.body) : undefined }, 0)
+    const status = answer?.status ?? 404
+    return { value: { status, ok: status < 300, headers: {}, text: answer?.json === undefined ? '' : JSON.stringify(answer.json) } }
+  })
+  return h
+}
 
 const run = (w: ReturnType<typeof createWorld>, max: number) => {
   for (let i = 0; i < max && (w.queue.length || w.current); i++) step(w)
@@ -67,7 +93,8 @@ test('a finished day turns into diaries and facts, and memory survives a save', 
   expect(again.memory.tom.some(m => m.text === 'That koi!')).toBe(true)
 })
 
-test('the pane draws, a wish reaches the agent with its memory', async ($, on) => {
+test('the pane draws the shared village, a wish reaches this session\'s model with its memory', async ($, on) => {
+  const h = villageServer(on)
   const asked: string[] = []
   on('model.complete', async (_, e) => {
     asked.push(e.prompt)
@@ -88,11 +115,14 @@ test('the pane draws, a wish reaches the agent with its memory', async ($, on) =
     expect(await ui.find({ key: 'panel-village' })).toBeDefined()
     await ui.press({ key: 'tab-chat' })
     await ui.input({ key: 'wish', text: 'visit Mabel' })
+    await ui.press({ key: 'quick-fish' })
     await ui.unmount()
   }
   expect(asked.length).toBe(2)
   expect(asked[1]).toContain('The player asked me: "visit Mabel"')
   expect(asked[1]).toContain('### Mabel')
+  expect(h.jobs.length).toBe(0)
+  expect(h.world.queue.length + (h.world.current ? 1 : 0)).toBe(1)
 })
 
 test('every day brings at least one event that starts in daylight', async () => {
@@ -474,7 +504,8 @@ test('a speech bubble stays where it first appeared, even when space frees up', 
   expect(find('Claude')).not.toBe(null)
 })
 
-test('the desktop pane points to the browser view and keeps the chat and the wish field', async $ => {
+test('the desktop pane points to the shared village\'s browser view and keeps the chat and the wish field', async ($, on) => {
+  villageServer(on)
   for (const surface of ['desktop', 'mobile'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
     expect(await ui.find({ text: /lives in your browser/ })).toBeDefined()
@@ -620,4 +651,199 @@ test('locked bikes keep everyone off them, so the data center runs flat and turn
   enqueue(w, [{ do: 'unlock' }])
   run(w, 2000)
   expect(w.dc.locked).toBe(false)
+})
+
+test('the shared village hands a wish to a session and acts on its answer', async () => {
+  const h = createHost(undefined)
+  h.world.events = []
+  act(h, { kind: 'wish', text: 'go fishing' }, 0)
+  expect(h.world.thinking).toBe(true)
+  act(h, { kind: 'wish', text: 'and chop wood' }, 0)
+  expect(h.jobs.length).toBe(1)
+  const job = takeJob(h, 0)
+  expect(job?.kind).toBe('wish')
+  expect(job?.prompt).toContain('go fishing')
+  expect(takeJob(h, 1000)).toBe(null)
+  expect(takeJob(h, LEASE_MS + 1)?.id).toBe(job?.id)
+  expect(finishJob(h, job!.id, '[{"do":"fish"}]')).toBe(true)
+  expect(finishJob(h, job!.id, '[{"do":"fish"}]')).toBe(false)
+  expect(h.world.thinking).toBe(false)
+  expect(h.world.queue.length + (h.world.current ? 1 : 0)).toBeGreaterThan(0)
+  tickHost(h, 0)
+  expect(h.chat.some(l => l.who === 'you' && l.text === 'go fishing')).toBe(true)
+})
+
+test('a wish no session takes is dropped, a failed one gets a foggy answer', async () => {
+  const h = createHost(undefined)
+  act(h, { kind: 'wish', text: 'plant pumpkins' }, 0)
+  tickHost(h, WISH_WAIT_MS + 1)
+  expect(h.jobs.length).toBe(0)
+  expect(h.world.thinking).toBe(false)
+  act(h, { kind: 'wish', text: 'plant pumpkins' }, 0)
+  const job = takeJob(h, 0)!
+  finishJob(h, job.id, null, 'timed out')
+  expect(h.world.player.bubble?.text).toContain('timed out')
+})
+
+test('the shared village queues one diary job per finished day and keeps its save', async () => {
+  const h = createHost(undefined)
+  h.world.memory.tom = [{ day: 1, time: '08:00', text: 'Caught a big bass.', kind: 'event' }]
+  h.world.diaryDue = [1]
+  tickHost(h, 0)
+  tickHost(h, 0)
+  expect(h.jobs.filter(j => j.kind === 'diary').length).toBe(1)
+  const job = takeJob(h, 0)!
+  finishJob(h, job.id, null)
+  expect(h.world.diaryDue).toEqual([])
+  act(h, { kind: 'chore', key: 'toString' }, 0)
+  act(h, { kind: 'chore', key: 'fish' }, 0)
+  expect(h.world.queue.length + (h.world.current ? 1 : 0)).toBe(1)
+  h.world.bells = 1234
+  const again = createHost(JSON.parse(JSON.stringify(saveOf(h))))
+  expect(again.world.bells).toBe(1234)
+})
+
+test('sessions connect to the shared village, mirror their work there and go stale', async () => {
+  const h = createHost(undefined)
+  expect(hello(h, 's-1', { repo: 'cozy-village', branch: 'main' }, 0)).toBe(true)
+  expect(hello(h, 's-1', {}, 10)).toBe(false)
+  expect(h.sessions.get('s-1')?.repo).toBe('cozy-village')
+  sessionEvent(h, 's-1', { type: 'tool', tool: 'Bash' }, 20)
+  expect(h.sessions.get('s-1')?.status).toBe('working')
+  expect(h.world.echo?.kind).toBe('shell')
+  sessionEvent(h, 's-1', { type: 'turn', seconds: 45, outcome: 'answer' }, 30)
+  expect(h.sessions.get('s-1')?.status).toBe('idle')
+  expect(h.world.cheer).toBeGreaterThan(0)
+  sessionEvent(h, 's-1', { type: 'tests', passed: true }, 40)
+  expect(h.world.rainbow).toBeGreaterThan(0)
+  sessionEvent(h, 's-2', { type: 'tool', tool: 'Read' }, 50)
+  expect(h.sessions.size).toBe(2)
+  bye(h, 's-2')
+  expect(h.sessions.size).toBe(1)
+  tickHost(h, 40 + SESSION_STALE_MS + 1)
+  expect(h.sessions.size).toBe(0)
+})
+
+test('a pane gets the picture, the chat and only the headlines it has not seen', async () => {
+  const h = createHost(undefined)
+  h.world.announce.push('Tests passed!')
+  tickHost(h, 0)
+  const first = pane(h, 60, 0, true)
+  expect(first.cols).toBe(60)
+  expect(first.cells).toBe(encode(frame(h.world, 60)))
+  expect(first.announce).toContain('Tests passed!')
+  expect(first.info?.people.length).toBe(VILLAGERS.length + 1)
+  const second = pane(h, 999, first.seq, false)
+  expect(second.cols).toBe(80)
+  expect(second.announce).toEqual([])
+  expect(second.info).toBe(undefined)
+  expect(takePostcard(h, 40)).toContain('village')
+  expect(memoryReport(h)).toContain('Claude')
+  h.world.friendship.tom = 5
+  h.world.diaryDue = [1]
+  forget(h)
+  expect(h.world.friendship.tom).toBe(0)
+  expect(h.world.diaryDue).toEqual([])
+})
+
+test('the office stands north of the plaza, and Claude can walk in and out', async () => {
+  const w = createWorld()
+  w.events = []
+  w.requests = []
+  expect(mapPayload(w).rows[5][50]).toBe('d')
+  expect(parseActions('[{"do":"office"}]')).toEqual([{ do: 'office' }])
+  enqueue(w, [{ do: 'office' }])
+  run(w, 3000)
+  expect(w.scene).toBe('office')
+  expect(w.player.bubble?.text).toContain('Nobody at work')
+  expect(mapPayload(w).scene).toBe('office')
+  expect(frame(w, 80).length).toBe(80 * ROWS * 3)
+  enqueue(w, [{ do: 'fish' }])
+  run(w, 3000)
+  expect(w.scene).toBe('village')
+})
+
+test('every session gets a desk and an apprentice who mirrors its work', async () => {
+  const h = createHost(undefined)
+  hello(h, 's-1', { repo: 'cozy-village', branch: 'main' }, 0)
+  hello(h, 's-2', { repo: 'api-server', branch: 'fix/login' }, 0)
+  const [a, b] = h.world.office.staff
+  expect(h.world.office.staff.length).toBe(2)
+  expect(a.desk).not.toBe(b.desk)
+  expect(a.name).not.toBe(b.name)
+  expect(a.bubble?.text).toContain('cozy-village')
+  for (let i = 0; i < 200; i++) tickHost(h, 0)
+  expect({ x: a.x, y: a.y }).toEqual(seat(a.desk))
+  sessionEvent(h, 's-1', { type: 'tool', tool: 'Edit' }, 0)
+  expect(a.status).toBe('working')
+  expect(deskStatus(h.world.office)[a.desk]).toBe('working')
+  expect(summary(h.world, 'hi')).toContain("I'm busy on cozy-village (main), editing a file.")
+  sessionEvent(h, 's-1', { type: 'turn', seconds: 40, outcome: 'answer' }, 0)
+  expect(a.status).toBe('done')
+  sessionEvent(h, 's-2', { type: 'tests', passed: false }, 0)
+  expect(b.status).toBe('error')
+  expect(infoPayload(h.world).office.map(o => o.status)).toEqual(['done', 'error'])
+  bye(h, 's-1')
+  expect(a.leaving).toBe(true)
+  for (let i = 0; i < 200; i++) tickHost(h, 0)
+  expect(h.world.office.staff.map(s => s.id)).toEqual(['s-2'])
+  hello(h, 's-3', { repo: 'docs', branch: '' }, 0)
+  expect(h.world.office.staff.find(s => s.id === 's-3')?.desk).toBe(a.desk)
+})
+
+test('Claude visits the apprentices, who tell what they are working on', async () => {
+  const h = createHost(undefined)
+  h.world.events = []
+  h.world.requests = []
+  hello(h, 's-1', { repo: 'cozy-village', branch: 'main' }, 0)
+  sessionEvent(h, 's-1', { type: 'tool', tool: 'Bash' }, 0)
+  act(h, { kind: 'office' }, 0)
+  for (let i = 0; i < 3000 && (h.world.queue.length || h.world.current); i++) tickHost(h, 0)
+  expect(h.world.scene).toBe('office')
+  const name = h.world.office.staff[0].name
+  expect(h.chat.some(l => l.who === name && l.text === "I'm busy on cozy-village (main), running a command.")).toBe(true)
+  const state = statePayload(h.world, h.chat)
+  expect(state.movers.map(m => m.k)).toEqual(['app:s-1', 'me'])
+  expect(state.desks?.[h.world.office.staff[0].desk]).toBe('working')
+  expect(mapPayload(h.world).rows.length).toBe(OH)
+  // idle, Claude stays in the office, dropping by the desks, until told to leave
+  for (let i = 0; i < 3000; i++) tickHost(h, 0)
+  expect(h.world.scene).toBe('office')
+  act(h, { kind: 'office' }, 0)
+  for (let i = 0; i < 3000 && (h.world.queue.length || h.world.current); i++) tickHost(h, 0)
+  expect(h.world.scene).toBe('village')
+})
+
+test('with every desk taken, a new apprentice stands by the wall', async () => {
+  const h = createHost(undefined)
+  for (let i = 0; i < DESKS.length + 1; i++) hello(h, `s-${i}`, { repo: `repo-${i}`, branch: '' }, 0)
+  const extra = h.world.office.staff[DESKS.length]
+  expect(extra.desk).toBeLessThan(0)
+  for (let i = 0; i < 300; i++) tickHost(h, 0)
+  expect({ x: extra.x, y: extra.y }).toEqual(seat(extra.desk))
+})
+
+test('an apprentice says what kind of work their session is doing, from the tool name alone', async () => {
+  expect(doingLine('Read')).toBe('reading a file')
+  expect(doingLine('Edit')).toBe('editing a file')
+  expect(doingLine('Write')).toBe('writing a file')
+  expect(doingLine('Grep')).toBe('searching the code')
+  expect(doingLine('Glob')).toBe('looking for files')
+  expect(doingLine('PowerShell')).toBe('running a command')
+  expect(doingLine('WebSearch')).toBe('searching the web')
+  expect(doingLine('WebFetch')).toBe('reading a web page')
+  expect(doingLine('Agent')).toBe('asking a helper')
+  expect(doingLine('mcp__docs__read')).toBe('using a connector')
+  expect(doingLine('SomethingNew')).toBe('')
+
+  const h = createHost(undefined)
+  hello(h, 's-1', { repo: 'cozy-village', branch: 'main' }, 0)
+  const a = h.world.office.staff[0]
+  sessionEvent(h, 's-1', { type: 'tool', tool: 'Read' }, 0)
+  expect(a.bubble?.text).toBe('reading a file')
+  sessionEvent(h, 's-1', { type: 'tool', tool: 'Edit' }, 0)
+  expect(a.bubble?.text).toBe('editing a file')
+  expect(summary(h.world, 'hi')).toContain("I'm busy on cozy-village (main), editing a file.")
+  sessionEvent(h, 's-1', { type: 'turn', seconds: 5, outcome: 'answer' }, 0)
+  expect(a.doing).toBe('')
 })

@@ -1,24 +1,31 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, HttpResponse, Register } from 'claude-code'
 
-import type { LogLine, Tab } from '../types'
-import { MUSEUM, PROJECTS } from './catalog'
-import type { ProjectId } from './catalog'
-import {
-  applyDiary, createWorld, DIARY_SYSTEM, diaryPrompt, echoTests, echoTool, echoTurn, encode, enqueue, frame, heardWish, MAX_VIEW,
-  memoryText, parseActions, postcard, projectIds, restore, ROWS, sayPlayer, snapshot, step, summary, systemPrompt, ticker, VILLAGERS,
-} from './game'
-import { CHORES, infoPayload, mapPayload, statePayload } from './web'
+import type { Info, LogLine, Tab } from '../types'
+import { encode, MAX_VIEW, ROWS, VILLAGERS } from './game'
+import type { Job } from './host'
+import { CHORES } from './web'
+
+// The village itself runs in one local server that every session shares (web/server.mjs, hooks/host.ts).
+// This module connects to it: it says hello, reports what the session's real work is doing, draws the pane
+// from the server's picture, and runs the model calls the village hands out, since only a session can.
 
 const PANE = 'cozy-village'
 /** The model behind the villagers; the `model` setting replaces it when the module loads. */
 let MODEL = 'haiku'
+/** Where the save lived before the shared server; moved into the server's save folder once. */
 const STORE_KEY = 'world'
 const log = atom({ plugin: 'cozy-village', key: 'log' } as const, [] as LogLine[])
 const thinking = atom({ plugin: 'cozy-village', key: 'thinking' } as const, false)
 const tab = atom({ plugin: 'cozy-village', key: 'tab' } as const, 'chat' as Tab)
-/** The browser view's address once its server listens, empty before; the pane shows it. */
+/** The browser view's address once the server is there, empty before; the pane shows it. */
 const webLink = atom({ plugin: 'cozy-village', key: 'web' } as const, '')
+/** The Memories and Village tabs, as the server last sent them. */
+const info = atom({ plugin: 'cozy-village', key: 'info' } as const, null as Info | null)
+/** Whether the museum is built and Claude is inside it, for the tab bar's button. */
+const museum = atom({ plugin: 'cozy-village', key: 'museum' } as const, { open: false, inside: false })
+/** How many apprentices work at the office and whether Claude is inside it, for the tab bar's button. */
+const office = atom({ plugin: 'cozy-village', key: 'office' } as const, { staff: 0, inside: false })
 
 const ACCENT = '#e6c34a'
 const INK = '#3a2e2a'
@@ -35,118 +42,202 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'village', label: 'Village' },
 ]
 const NAME_WIDTH = 7
+/** How an apprentice's desk reads in the Village tab. */
+const DESK_STATUS: Record<Info['office'][number]['status'], [string, string]> = {
+  working: ['busy', '#69f0ae'], idle: ['idle', '#90a4ae'], done: ['done', '#ffd54f'], error: ['trouble', '#ff5252'],
+}
 const bar = (have: number, total: number, width = 12) => {
   const full = Math.round((Math.min(have, total) / Math.max(1, total)) * width)
   return '█'.repeat(full) + '░'.repeat(width - full)
 }
+const TESTS = /\b(test|tests|vitest|jest|pytest|dotnet\s+test|cargo\s+test|npm\s+run\s+build|dotnet\s+build|tsc)\b/i
+/** How often a session that only reports its work checks in, takes model jobs and looks for a server. */
+const LINK_MS = 3000
 
-let world = createWorld()
+/** The link to the shared server; `port` is 0 while there is none. */
+const server = { port: 0, token: '', session: `pane-${Math.random().toString(36).slice(2)}`, repo: '', branch: '', launching: false }
+/** What the pane draws, as the server last sent it. */
+const pane = { cells: '', cols: 0, chat: '', since: 0, polls: 0, polling: false, ticker: '' }
 let viewCols = MAX_VIEW
 let surface = 'terminal'
-let savedHour = -1
-let isReflecting = false
-let lastTicker = ''
-/** The browser view's server: started once, then fed the world every tick (see web/server.mjs). */
-const web = { started: false, port: 0, token: '', posting: false, mapSent: '', mapAt: -1, infoSent: '', infoAt: -1, chat: [] as LogLine[] }
-/** The village's tick; null while the village is stopped. */
+/** The pane's clock; null while the village is stopped in this session. */
 let tick: { cancel: () => void } | null = null
+let busyWithJob = false
 /** The `ticker` setting; set when the module registers. */
 let showTicker = false
-const TESTS = /\b(test|tests|vitest|jest|pytest|dotnet\s+test|cargo\s+test|npm\s+run\s+build|dotnet\s+build|tsc)\b/i
+let adults = false
+
+/** An empty picture `cols` wide: spaces on the night sky's ink. */
+function blank(cols: number): string {
+  const cells = new Uint32Array(cols * ROWS * 3)
+  for (let i = 0; i < cells.length; i += 3) { cells[i] = 0x20; cells[i + 1] = 0x808080; cells[i + 2] = 0x101820 }
+  return encode(cells)
+}
 
 function open($: EngineInterface, focus?: true) {
   return $.ui.open({ id: PANE, title: 'Village', rows: ROWS + 12, columns: MAX_VIEW + 2, focus })
 }
 
-async function ask($: EngineInterface, wish: string) {
-  const text = wish.trim()
-  if (!text || world.thinking) return
-  world.log.push({ who: 'you', text })
-  heardWish(world, text)
-  world.thinking = true
-  await update($, thinking, () => true)
-  const reply = await $.model.complete({ model: MODEL, system: systemPrompt(world), prompt: summary(world, text), maxTokens: 1200, timeoutMs: 60000 })
-  world.thinking = false
-  await update($, thinking, () => false)
-  if (!reply.isAnswered) {
-    sayPlayer(world, `Sorry, my head feels foggy... (${reply.reason})`)
-    return
-  }
-  const actions = parseActions(reply.text)
-  if (actions.length === 0) sayPlayer(world, "Hmm, I'm not sure how to do that.")
-  else enqueue(world, actions)
+/** The folder the server keeps its save and server.json in (`VILLAGE_HOME` for a test village); the server is told the same. */
+async function villageHome($: EngineInterface): Promise<string> {
+  const own = await $.env.get('VILLAGE_HOME')
+  if (own) return own.replaceAll('\\', '/')
+  const config = await $.env.get('CLAUDE_CONFIG_DIR')
+  const home = (await $.env.get('USERPROFILE')) || (await $.env.get('HOME')) || '.'
+  return `${(config || `${home}/.claude`).replaceAll('\\', '/')}/cozy-village`
 }
 
-/** Writes the diaries of a finished day, one model call for every character. */
-async function reflect($: EngineInterface) {
-  const day = world.diaryDue[0]
-  if (day === undefined || isReflecting) return
-  isReflecting = true
-  const prompt = diaryPrompt(world, day)
-  const reply = prompt ? await $.model.complete({ model: MODEL, system: DIARY_SYSTEM, prompt, maxTokens: 1200, timeoutMs: 60000 }) : null
-  applyDiary(world, day, reply?.isAnswered ? reply.text : null)
-  world.diaryDue.shift()
-  isReflecting = false
-  if (prompt) world.log.push({ who: 'event', text: `Everyone wrote in their diary about day ${day}.` })
-  await $.store.set(STORE_KEY, snapshot(world))
-}
-
-/** Starts the browser view's server once; it lives as long as this module, which kills it on unload. */
-function startWeb($: EngineInterface) {
-  if (web.started || !tick) return
-  web.started = true
-  const bytes = crypto.getRandomValues(new Uint8Array(16))
-  web.token = [...bytes].map(b => b.toString(16).padStart(2, '0')).join('')
-  void (async () => {
-    try {
-      const server = $.process.spawn({ argv: ['node', `${$.plugin.root}/web/server.mjs`], env: { VILLAGE_TOKEN: web.token } })
-      for await (const { stream, text } of server) {
-        const port = /LISTENING (\d+)/.exec(text)
-        if (stream === 'stdout' && port) {
-          web.port = Number(port[1])
-          web.mapSent = ''; web.infoSent = ''
-          await update($, webLink, () => `http://localhost:${web.port}/?k=${web.token}`)
-        }
-      }
-    } catch (err) {
-      $.ui.log(`cozy-village: the browser view could not start (${String(err)}); is Node.js installed?`, { to: 'debug' })
-    }
-    web.port = 0
-    web.started = false
-    await update($, webLink, () => '')
-  })()
-}
-
-/** Posts the world to the browser view and acts on what its viewers asked for since the last post. */
-async function feedWeb($: EngineInterface) {
-  web.posting = true
+/** Calls the shared server; null when it is not there (then the link is dropped, to be found again). */
+async function api($: EngineInterface, method: 'GET' | 'POST', path: string, body?: unknown): Promise<HttpResponse | null> {
+  if (!server.port) return null
   try {
-    let map: string | undefined
-    if (world.tick - web.mapAt >= 10 || !web.mapSent) {
-      web.mapAt = world.tick
-      const next = JSON.stringify(mapPayload(world))
-      if (next !== web.mapSent) { map = next; web.mapSent = next }
-    }
-    let info: string | undefined
-    if (world.tick - web.infoAt >= 10 || !web.infoSent) {
-      web.infoAt = world.tick
-      const next = JSON.stringify(infoPayload(world))
-      if (next !== web.infoSent) { info = next; web.infoSent = next }
-    }
-    const body = `{"state":${JSON.stringify(statePayload(world, web.chat))}${map ? `,"map":${map}` : ''}${info ? `,"info":${info}` : ''}}`
-    const res = await $.http.fetch(`http://127.0.0.1:${web.port}/api/state`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-village-token': web.token }, body })
-    if (!res.ok) { web.mapSent = ''; web.infoSent = ''; return }
-    const { inbox } = JSON.parse(res.text) as { inbox?: { kind?: unknown; text?: unknown; key?: unknown; index?: unknown }[] }
-    for (const a of inbox ?? []) {
-      if (a.kind === 'wish' && typeof a.text === 'string') void ask($, a.text.slice(0, 500))
-      else if (a.kind === 'chore' && typeof a.key === 'string' && CHORES[a.key]) enqueue(world, CHORES[a.key].plan as Parameters<typeof enqueue>[1])
-      else if (a.kind === 'museum' && world.projects.museum.done) enqueue(world, [{ do: world.scene === 'museum' ? 'exit' : 'tour' }])
-    }
+    const res = await $.http.fetch(`http://127.0.0.1:${server.port}${path}`, {
+      method,
+      headers: { 'content-type': 'application/json', 'x-village-token': server.token },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    })
+    // a new server took the port since, with a token of its own
+    if (res.status === 403) throw new Error('not our server')
+    return res
   } catch {
-    web.mapSent = ''; web.infoSent = ''
-  } finally {
-    web.posting = false
+    server.port = 0
+    await update($, webLink, () => '')
+    return null
   }
+}
+
+const q = (params: Record<string, string | number>) => Object.entries(params).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&')
+
+/**
+ * Finds the shared server, or with `start` starts it when none runs. A server stopped on purpose
+ * (`/village stop` in any session) is only started again by a `start`; without one this session's pane stops too.
+ */
+async function connect($: EngineInterface, start: boolean): Promise<boolean> {
+  if (server.port) return true
+  if (server.launching) return false
+  server.launching = true
+  try {
+    const home = await villageHome($)
+    let found: { port?: unknown; token?: unknown; stopped?: unknown } | null = null
+    try { found = JSON.parse(await $.fs.read(`${home}/server.json`) as string) } catch { /* no server yet */ }
+    if (found?.stopped && !start) {
+      stopClock($)
+      return false
+    }
+    if (found && typeof found.port === 'number' && typeof found.token === 'string' && !found.stopped) {
+      server.port = found.port
+      server.token = found.token
+      if (!(await api($, 'GET', '/api/ping'))?.ok) server.port = 0
+    }
+    if (!server.port && start) {
+      // the save from before the shared server moves into its folder once, so nobody loses their village
+      if (!(await $.fs.exists(`${home}/world.json`))) {
+        const old = await $.store.get(STORE_KEY)
+        if (old) await $.fs.write(`${home}/world.json`, JSON.stringify(old))
+      }
+      const done = await $.process.run(['node', `${$.plugin.root}/web/launch.mjs`], {
+        env: { VILLAGE_HOME: home, VILLAGE_ADULTS: adults ? '1' : '0' }, timeoutMs: 30000,
+      })
+      const line = done.stdout.trim().split('\n').pop() ?? ''
+      if (done.exitCode !== 0 || !line.startsWith('{')) {
+        $.ui.log(`cozy-village: the village server did not start (${done.stderr.trim() || done.exitCode}); is Node.js 22.18+ installed?`, { to: 'debug' })
+        return false
+      }
+      const launched = JSON.parse(line) as { port: number; token: string }
+      server.port = launched.port
+      server.token = launched.token
+    }
+    if (!server.port) return false
+    await api($, 'POST', '/api/hello', { session: server.session, repo: server.repo, branch: server.branch })
+    await update($, webLink, () => `http://localhost:${server.port}/?k=${server.token}`)
+    return true
+  } catch (err) {
+    $.ui.log(`cozy-village: cannot reach the village server (${String(err)})`, { to: 'debug' })
+    server.port = 0
+    return false
+  } finally {
+    server.launching = false
+  }
+}
+
+/** Takes one model job from the village, runs it with this session's model and answers it. */
+async function runJob($: EngineInterface) {
+  if (busyWithJob || !server.port) return
+  busyWithJob = true
+  try {
+    const res = await api($, 'GET', `/api/jobs?${q({ session: server.session })}`)
+    if (res?.status !== 200) return
+    const job = JSON.parse(res.text) as Job
+    const reply = await $.model.complete({ model: MODEL, system: job.system, prompt: job.prompt, maxTokens: job.maxTokens, timeoutMs: 60000 })
+    await api($, 'POST', `/api/jobs/${job.id}`, reply.isAnswered ? { text: reply.text } : { text: null, reason: reply.reason })
+  } catch (err) {
+    $.ui.log(`cozy-village: a village job failed (${String(err)})`, { to: 'debug' })
+  } finally {
+    busyWithJob = false
+  }
+}
+
+/** Reports what the session's real work is doing; nothing when no server runs. */
+function report($: EngineInterface, event: Record<string, unknown>) {
+  if (server.port) void api($, 'POST', '/api/event', { session: server.session, ...event })
+}
+
+/** Fetches what the pane shows and draws it: the picture, the chat, the headlines, the tab panels. */
+async function pollPane($: EngineInterface) {
+  pane.polling = true
+  try {
+    const current = await read($, tab)
+    const wantInfo = current !== 'chat' && pane.polls++ % 10 === 0
+    const res = await api($, 'GET', `/api/pane?${q({ session: server.session, cols: viewCols, since: pane.since, info: wantInfo ? 1 : 0, cells: surface === 'terminal' ? 1 : 0 })}`)
+    if (!res?.ok) return
+    const p = JSON.parse(res.text) as {
+      cols: number; cells: string; chat: LogLine[]; thinking: boolean; scene: string; museumOpen: boolean; staff: number; ticker: string
+      announce: string[]; seq: number; info?: Info
+    }
+    pane.since = p.seq
+    for (const headline of p.announce) $.ui.toast(`★ ${headline}`)
+    const chat = JSON.stringify(p.chat)
+    if (chat !== pane.chat) { pane.chat = chat; await update($, log, () => p.chat) }
+    if (p.thinking !== await read($, thinking)) await update($, thinking, () => p.thinking)
+    const place = await read($, museum)
+    if (place.open !== p.museumOpen || place.inside !== (p.scene === 'museum')) await update($, museum, () => ({ open: p.museumOpen, inside: p.scene === 'museum' }))
+    const desks = await read($, office)
+    if (desks.staff !== p.staff || desks.inside !== (p.scene === 'office')) await update($, office, () => ({ staff: p.staff, inside: p.scene === 'office' }))
+    if (p.info) await update($, info, () => p.info!)
+    if (p.cells) {
+      pane.cells = p.cells
+      pane.cols = p.cols
+      void $.ui.blit({ requestId: PANE, key: 'world', columns: p.cols, rows: ROWS, cells: p.cells })
+    }
+    if (showTicker && p.ticker !== pane.ticker) { pane.ticker = p.ticker; $.ui.status(p.ticker) }
+  } catch {
+    // the next poll tries again
+  } finally {
+    pane.polling = false
+  }
+}
+
+/** The pane runs between a start (`/village`, auto-open, the ticker) and a stop (`/village stop`). */
+function startClock($: EngineInterface) {
+  if (tick) return
+  tick = $.clock.every(150, async () => {
+    if (!server.port) { await connect($, false); return }
+    if (!pane.polling) await pollPane($)
+  })
+}
+
+function stopClock($: EngineInterface) {
+  tick?.cancel()
+  tick = null
+  if (showTicker) $.ui.status(undefined)
+  pane.ticker = ''
+}
+
+/** Sends a wish, a chore or the museum button; a wish's model call starts here right away. */
+async function act($: EngineInterface, action: Record<string, unknown>) {
+  if (!(await connect($, true))) { $.ui.toast('The village server is not running (it needs Node.js 22.18+).'); return }
+  await api($, 'POST', '/api/do', { ...action, session: server.session })
+  if (action.kind === 'wish') await runJob($)
 }
 
 /** Opens a link in the person's browser, the way their system does it. */
@@ -162,58 +253,11 @@ async function openInBrowser($: EngineInterface, url: string): Promise<boolean> 
   return false
 }
 
-function memoryReport(): string {
-  const blocks = [`Claude\n${memoryText(world, 'claude', 10)}`]
-  for (const v of VILLAGERS) blocks.push(`${v.name} (friendship ${world.friendship[v.id] ?? 0})\n${memoryText(world, v.id, 5)}`)
-  return blocks.join('\n\n')
-}
-
-/** The village only runs between a start (`/village`, auto-open, the ticker) and a stop (`/village stop`). */
-function startClock($: EngineInterface) {
-  if (tick) return
-  tick = $.clock.every(150, async () => {
-    step(world)
-    const lines = world.log.splice(0)
-    if (lines.length) {
-      web.chat = [...web.chat, ...lines].slice(-60)
-      await update($, log, list => [...list, ...lines].slice(-60))
-    }
-    if (web.port && !web.posting) void feedWeb($)
-    for (const headline of world.announce.splice(0)) $.ui.toast(`★ ${headline}`)
-    if (world.diaryDue.length && !isReflecting) void reflect($)
-
-    if (surface === 'terminal') {
-      void $.ui.blit({ requestId: PANE, key: 'world', columns: viewCols, rows: ROWS, cells: encode(frame(world, viewCols)) })
-    }
-
-    if (showTicker && world.tick % 20 === 0) {
-      const line = ticker(world)
-      if (line !== lastTicker) { lastTicker = line; $.ui.status(line) }
-    }
-
-    const hour = Math.floor(world.minutes / 60)
-    if (hour !== savedHour) {
-      savedHour = hour
-      void $.store.set(STORE_KEY, snapshot(world))
-    }
-  })
-}
-
-async function stopVillage($: EngineInterface) {
-  tick?.cancel()
-  tick = null
-  const port = web.port
-  if (port) await $.http.fetch(`http://127.0.0.1:${port}/api/stop`, { method: 'POST', headers: { 'x-village-token': web.token } }).catch(() => {})
-  await $.store.set(STORE_KEY, snapshot(world))
-  if (showTicker) $.ui.status(undefined)
-  lastTicker = ''
-}
-
 export const register: Register = (on, options) => {
   const autoOpen = options.autoOpen === true
   showTicker = options.ticker === true
   MODEL = typeof options.model === 'string' && options.model ? options.model : 'haiku'
-  world.adults = options.nightclub === true
+  adults = options.nightclub === true
 
   on('session.start', async ($, e, next) => {
     await $.command.register({
@@ -221,55 +265,70 @@ export const register: Register = (on, options) => {
       description: 'Open the cozy village; "/village web" opens it in your browser, "/village stop" stops it for good, "/village memory" shows what everyone remembers, "/village forget" wipes it',
       argumentHint: '[web|stop|memory|forget]',
     })
-    restore(world, await $.store.get(STORE_KEY))
+    server.session = await $.session.id()
+    const repo = await $.session.repo().catch(() => null)
+    const cwd = (await $.session.cwd()).replaceAll('\\', '/')
+    server.repo = (repo?.root ?? cwd).replaceAll('\\', '/').split('/').filter(Boolean).pop() ?? ''
+    const branch = await $.process.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], { timeoutMs: 5000 }).catch(() => null)
+    server.branch = branch?.exitCode === 0 ? branch.stdout.trim() : ''
 
+    // every session joins a running village, pane or not: it reports its work and helps with model calls
+    $.clock.every(LINK_MS, async () => {
+      if (!server.port) await connect($, false)
+      else await runJob($)
+    })
     if (autoOpen || showTicker) startClock($)
-
+    void connect($, autoOpen || showTicker)
     if (autoOpen) void open($)
     if (!showTicker) $.ui.status(undefined)
     return next(e)
   })
 
+  on('session.end', async ($, e, next) => {
+    if (server.port) await api($, 'POST', '/api/bye', { session: server.session })
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
   // the village mirrors the real session: tools become chores, finished turns get a cheer
   on('tool.call', async ($, e, next) => {
     if (e.agentId) return next(e)
-    echoTool(world, String(e.tool))
+    report($, { type: 'tool', tool: String(e.tool) })
     const result = await next(e)
     const command = String((e as { input?: { command?: unknown } }).input?.command ?? '')
     if (/bash|powershell/i.test(String(e.tool)) && TESTS.test(command)) {
-      echoTests(world, !(result as { isError?: boolean }).isError)
+      report($, { type: 'tests', passed: !(result as { isError?: boolean }).isError })
     }
     return result
   }).catch(($, e, next) => next(e)) // the village only watches: whatever goes wrong here, the tool call runs untouched
 
   on('turn.complete', async ($, e, next) => {
-    if (!e.agentId) echoTurn(world, e.durationMs / 1000, e.reason === 'answer' ? 'answer' : e.reason === 'aborted' ? 'aborted' : 'error')
+    if (!e.agentId) report($, { type: 'turn', seconds: e.durationMs / 1000, outcome: e.reason === 'answer' ? 'answer' : e.reason === 'aborted' ? 'aborted' : 'error' })
     return next(e)
   })
 
   on('command.run', { command: 'village' }, async ($, e) => {
     const arg = e.args.trim().toLowerCase()
-    if (arg === 'memory') return { text: memoryReport() }
     if (arg === 'stop') {
-      await stopVillage($)
+      stopClock($)
+      await api($, 'POST', '/api/stop')
+      server.port = 0
+      await update($, webLink, () => '')
       await $.ui.close({ id: PANE })
-      return { text: 'The village is stopped: nothing runs in the background now. /village starts it again.' }
+      return { text: 'The village is stopped in every session: nothing runs in the background now. /village starts it again.' }
+    }
+    if (!(await connect($, true))) return { text: 'The village did not start. It needs Node.js 22.18 or newer on this computer.' }
+    if (arg === 'memory') {
+      const res = await api($, 'GET', '/api/memory')
+      return { text: res?.ok ? (JSON.parse(res.text) as { text: string }).text : 'The village did not answer.' }
     }
     if (arg === 'web') {
       startClock($)
-      startWeb($)
-      for (let i = 0; i < 40 && !web.port; i++) await $.clock.sleep(100)
       const url = await read($, webLink)
-      if (!url) return { text: 'The browser view did not start. It needs Node.js on this computer.' }
       const opened = await openInBrowser($, url)
       return { text: opened ? `The village is open in your browser: ${url}` : `Open this link in your browser: ${url}` }
     }
     if (arg === 'forget') {
-      const fresh = createWorld()
-      world.memory = fresh.memory
-      world.friendship = fresh.friendship
-      world.diaryDue = []
-      await $.store.set(STORE_KEY, snapshot(world))
+      await api($, 'POST', '/api/forget')
       return { text: 'Everyone in the village forgot everything. Fresh start!' }
     }
     startClock($)
@@ -280,9 +339,13 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     surface = e.surface
     viewCols = Math.max(24, Math.min(MAX_VIEW, e.props.bodyColumns))
+    startClock($)
     const lines = await read($, log)
     const isThinking = await read($, thinking)
     const current = await read($, tab)
+    const panels = await read($, info)
+    const place = await read($, museum)
+    const desks = await read($, office)
     // map, tab bar, the panel's frame and the framed input take the rest of the rows
     const room = Math.max(3, Math.min(10, e.props.scroll.bodyRows - ROWS - 7))
     const width = viewCols
@@ -301,7 +364,10 @@ export const register: Register = (on, options) => {
         <Box flexDirection="row" columnGap={2}>
           {TABS.map(t => (t.id === current
             ? <Text bold color={INK} backgroundColor={ACCENT}>{` ${t.label} `}</Text>
-            : <Button key={`tab-${t.id}`} plain label={` ${t.label} `} dimColor onPress={() => update($, tab, () => t.id)} />))}
+            : <Button key={`tab-${t.id}`} plain label={` ${t.label} `} dimColor onPress={async () => {
+              await update($, tab, () => t.id)
+              pane.polls = 0 // the next poll brings the panel's data
+            }} />))}
         </Box>
         <Box flexDirection="row" columnGap={2}>
           {isThinking ? <Text italic color={ACCENT}>Claude is thinking…</Text> : null}
@@ -311,37 +377,25 @@ export const register: Register = (on, options) => {
             label="Postcard"
             dimColor
             onPress={async press => {
-              world.flash = 3
-              const copied = await $.ui.copy({ text: postcard(world, viewCols), surface: press.surface })
+              const res = await api($, 'GET', `/api/postcard?${q({ cols: viewCols })}`)
+              if (!res?.ok) { $.ui.toast('The village is not running.'); return }
+              const copied = await $.ui.copy({ text: (JSON.parse(res.text) as { text: string }).text, surface: press.surface })
               $.ui.toast(copied.isCopied ? 'Postcard copied to the clipboard!' : 'Could not copy the postcard here.')
             }}
           />
-          {world.projects.museum.done ? (
-            <Button
-              key="museum"
-              plain
-              label={world.scene === 'museum' ? 'Leave museum' : 'Museum tour'}
-              dimColor
-              onPress={() => enqueue(world, [{ do: world.scene === 'museum' ? 'exit' : 'tour' }])}
-            />
+          <Button key="office" plain label={desks.inside ? 'Leave office' : `Office (${desks.staff})`} dimColor onPress={() => act($, { kind: 'office' })} />
+          {place.open ? (
+            <Button key="museum" plain label={place.inside ? 'Leave museum' : 'Museum tour'} dimColor onPress={() => act($, { kind: 'museum' })} />
           ) : null}
         </Box>
       </Box>
     )
 
     // ---- one-key chores, no model call needed ----
-    const QUICK: { key: string; label: string; plan: Parameters<typeof enqueue>[1] }[] = [
-      { key: 'quick-fish', label: 'Fish', plan: [{ do: 'fish' }] },
-      { key: 'quick-chop', label: 'Chop ×5', plan: [{ do: 'chop', count: 5 }] },
-      { key: 'quick-water', label: 'Water', plan: [{ do: 'water' }] },
-      { key: 'quick-harvest', label: 'Harvest', plan: [{ do: 'harvest' }] },
-      { key: 'quick-sell', label: 'Sell', plan: [{ do: 'sell' }] },
-      { key: 'quick-mail', label: 'Mail', plan: [{ do: 'mail' }] },
-    ]
     const quick = (
       <Box flexDirection="row" columnGap={2} width={width}>
         <Text dimColor>Quick:</Text>
-        {QUICK.map(q => <Button key={q.key} plain label={q.label} dimColor onPress={() => enqueue(world, q.plan)} />)}
+        {Object.entries(CHORES).map(([key, c]) => <Button key={`quick-${key}`} plain label={c.label} dimColor onPress={() => act($, { kind: 'chore', key })} />)}
       </Box>
     )
 
@@ -356,64 +410,58 @@ export const register: Register = (on, options) => {
       )))
     if (chatRows.length === 0) chatRows.push(<Text dimColor italic>Nothing has happened yet. Tell Claude what to do below.</Text>)
 
-    const memoryRows = ['claude', ...VILLAGERS.map(v => v.id)].flatMap(who => {
-      const list = world.memory[who] ?? []
-      const diary = list.filter(m => m.kind === 'diary').slice(-1)[0]
-      const facts = list.filter(m => m.kind === 'fact').slice(-2).map(m => m.text)
-      const last = list.filter(m => m.kind === 'event').slice(-1)[0]
-      const hearts = who === 'claude' ? '' : `♥ ${world.friendship[who] ?? 0}`
-      return [
-        <Box flexDirection="row">
-          <Box width={NAME_WIDTH + 1} flexShrink={0}><Text bold color={COLORS[who]}>{NAMES[who]}</Text></Box>
-          <Box width={6} flexShrink={0}><Text color="#f48fb1">{hearts}</Text></Box>
-          <Text italic wrap="truncate">{diary ? `Day ${diary.day}: ${diary.text}` : last ? last.text : 'no memories yet'}</Text>
-        </Box>,
-        ...(facts.length ? [<Text dimColor wrap="truncate">{`${' '.repeat(NAME_WIDTH + 7)}knows: ${facts.join(' · ')}`}</Text>] : []),
-      ]
-    })
+    const loading = [<Text dimColor italic>Asking the village…</Text>]
+    const memoryRows = panels ? panels.people.flatMap(p => [
+      <Box flexDirection="row">
+        <Box width={NAME_WIDTH + 1} flexShrink={0}><Text bold color={p.color}>{p.name}</Text></Box>
+        <Box width={6} flexShrink={0}><Text color="#f48fb1">{p.hearts === null ? '' : `♥ ${p.hearts}`}</Text></Box>
+        <Text italic wrap="truncate">{p.diary}</Text>
+      </Box>,
+      ...(p.facts.length ? [<Text dimColor wrap="truncate">{`${' '.repeat(NAME_WIDTH + 7)}knows: ${p.facts.slice(-2).join(' · ')}`}</Text>] : []),
+    ]) : loading
 
-    const projectRows = projectIds(world).map(id => {
-      const def = PROJECTS[id]
-      const st = world.projects[id]
-      const items = Object.entries(def.items).map(([k, n]) => `${st.items[k] ?? 0}/${n} ${k}`).join(', ')
-      const have = st.bells + Object.values(st.items).reduce((a, b) => a + b, 0) * 100
-      const total = def.bells + Object.values(def.items).reduce((a, b) => a + b, 0) * 100
-      return (
+    const projectRows = (panels?.projects ?? []).map(p => (
+      <Box flexDirection="row" columnGap={1}>
+        <Box width={16} flexShrink={0}><Text>{p.name}</Text></Box>
+        {p.done
+          ? <Text color="#81c784">✓ built</Text>
+          : <><Text color="#81c784">{bar(Math.round(p.pct * 100), 100)}</Text><Text dimColor wrap="truncate">{`${p.bells}/${p.need} Bells · ${p.items.map(i => `${i.have}/${i.need} ${i.name}`).join(', ')}`}</Text></>}
+      </Box>
+    ))
+    const museumRows = panels?.museum.open
+      ? panels.museum.sections.map(s => (
         <Box flexDirection="row" columnGap={1}>
-          <Box width={16} flexShrink={0}><Text>{def.name}</Text></Box>
-          {st.done
-            ? <Text color="#81c784">✓ built</Text>
-            : <><Text color="#81c784">{bar(have, total)}</Text><Text dimColor wrap="truncate">{`${st.bells}/${def.bells} Bells · ${items}`}</Text></>}
+          <Box width={16} flexShrink={0}><Text>{s.name[0].toUpperCase() + s.name.slice(1)}</Text></Box>
+          <Text color="#4fc3f7">{bar(s.have, s.total)}</Text>
+          <Text dimColor>{`${s.have}/${s.total}`}</Text>
         </Box>
-      )
-    })
-    const museumRows = world.projects.museum.done
-      ? Object.entries(MUSEUM).map(([section, pieces]) => {
-        const have = pieces.filter(m => world.museum.includes(m)).length
-        return (
-          <Box flexDirection="row" columnGap={1}>
-            <Box width={16} flexShrink={0}><Text>{section[0].toUpperCase() + section.slice(1)}</Text></Box>
-            <Text color="#4fc3f7">{bar(have, pieces.length)}</Text>
-            <Text dimColor>{`${have}/${pieces.length}`}</Text>
-          </Box>
-        )
-      })
+      ))
       : [<Text dimColor>Not built yet - fund it on the plaza board.</Text>]
-    const requestRows = world.requests.length
-      ? world.requests.map(r => (
+    const requestRows = panels?.requests.length
+      ? panels.requests.map(r => (
         <Box flexDirection="row" columnGap={1}>
-          <Box width={NAME_WIDTH} flexShrink={0}><Text bold color={COLORS[r.who]}>{NAMES[r.who]}</Text></Box>
+          <Box width={NAME_WIDTH} flexShrink={0}><Text bold color={r.color}>{r.who}</Text></Box>
           {r.done
             ? <Text color="#81c784">✓ done</Text>
-            : <Text>{`wants ${r.amount - r.given} ${r.item}`}<Text dimColor>{` · pays ${r.reward} Bells`}</Text></Text>}
+            : <Text>{`wants ${r.left} ${r.item}`}<Text dimColor>{` · pays ${r.reward} Bells`}</Text></Text>}
         </Box>
       ))
       : [<Text dimColor>No requests today.</Text>]
-    const villageRows = [
+    const officeRows = panels?.office.length
+      ? panels.office.map(a => (
+        <Box flexDirection="row" columnGap={1}>
+          <Box width={NAME_WIDTH + 2} flexShrink={0}><Text bold color={a.color}>{a.name}</Text></Box>
+          <Box width={8} flexShrink={0}><Text color={DESK_STATUS[a.status][1]}>{DESK_STATUS[a.status][0]}</Text></Box>
+          <Text dimColor wrap="truncate">{`${a.repo || 'no repo'}${a.branch ? ` · ${a.branch}` : ''}${a.tool ? ` · ${a.tool}` : ''}`}</Text>
+        </Box>
+      ))
+      : [<Text dimColor>Nobody at work: no Claude Code sessions are open.</Text>]
+    const villageRows = panels ? [
+      header('Office', 'one apprentice per open session'), ...officeRows,
       header('Requests'), ...requestRows,
       header('Projects', 'fund them at the plaza board'), ...projectRows,
-      header('Museum', `${world.museum.length} pieces`), ...museumRows,
-    ]
+      header('Museum', `${panels.museum.sections.reduce((n, s) => n + s.have, 0)} pieces`), ...museumRows,
+    ] : loading
 
     const panelRows = current === 'memories' ? memoryRows : current === 'village' ? villageRows : chatRows
     const panel = (
@@ -424,13 +472,18 @@ export const register: Register = (on, options) => {
     )
 
     const placeholder = isThinking ? 'Claude is thinking…' : 'Tell Claude what to do, e.g. "buy pumpkin seeds and plant them"'
-    const submit = (value: string) => { void ask($, value) }
+    const submit = async (value: string) => {
+      const text = value.trim()
+      if (text) await act($, { kind: 'wish', text })
+    }
 
     if (e.surface === 'terminal') {
       const { Raster, Input } = $.ui.resolve(e)
+      // until the server's first picture arrives, a blank one of the right size
+      const cells = pane.cells && pane.cols === viewCols ? pane.cells : blank(viewCols)
       return (
         <Box flexDirection="column">
-          <Raster key="world" columns={viewCols} rows={ROWS} cells={encode(frame(world, viewCols))} />
+          <Raster key="world" columns={viewCols} rows={ROWS} cells={cells} />
           {tabs}
           {panel}
           {quick}
@@ -440,14 +493,14 @@ export const register: Register = (on, options) => {
         </Box>
       )
     }
-    // desktop and mobile: the village itself runs in the browser, where it can animate without reloading
-    startWeb($)
+    // desktop and mobile: the village itself shows in the browser, where it can animate without reloading
+    if (!server.port) void connect($, true)
     const url = await read($, webLink)
     const { Link } = $.ui.resolve(e)
     const browser = (
       <Box flexDirection="column" borderStyle="round" borderColor={ACCENT} paddingX={1} width={width}>
         <Text bold color={ACCENT}>🏡 The village lives in your browser</Text>
-        <Text dimColor>{url ? 'Pixel art, walking villagers, day and night. Open the link in the Browser pane (Ctrl+Shift+B) or your own browser; this pane keeps the chat and your wishes.' : 'Starting the browser view… (it needs Node.js)'}</Text>
+        <Text dimColor>{url ? 'Pixel art, walking villagers, day and night. Open the link in the Browser pane (Ctrl+Shift+B) or your own browser; this pane keeps the chat and your wishes.' : 'Starting the village… (it needs Node.js 22.18+)'}</Text>
         {url ? <Link href={url} label={url} /> : null}
         {url ? (
           <Box flexDirection="row" columnGap={2}>
