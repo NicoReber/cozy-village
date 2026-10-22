@@ -7,7 +7,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 ### Added
 - **One village for all your sessions.** The village now runs in one local server (`web/server.mjs`) that every Claude Code session on the computer joins, pane or not: each reports its tool calls, finished turns and test runs, and the village reacts to all of them. Two open sessions no longer overwrite each other's save.
 - The model calls the village needs are run by the open sessions, a wish by the session it was typed in.
-- **The office**, north of the plaza: a desk and an apprentice for every open session, who mirrors that session's work (typing, done, errors, test results) and walks out when it ends. Claude visits with `{"do":"office"}` or the new **Office** button and stays until told to leave. The Village tab and the browser's info panel list the apprentices with their repo, branch and status.
+- **The office**, north of the plaza: a desk and an apprentice for every open session, who mirrors that session's work (reading, editing, running commands, searching, finished turns, errors and test results) and walks out when it ends. Claude visits with `{"do":"office"}` or the new **Office** button and stays until told to leave. The Village tab and the browser's info panel list the apprentices with their repo, branch and status.
 
 ### Changed
 - The village needs Node.js 22.18 or newer, in the terminal too.

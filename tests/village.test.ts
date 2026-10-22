@@ -7,7 +7,7 @@ import {
 import {
   act, api, bye, createHost, finishJob, forget, hello, LEASE_MS, memoryReport, pane, saveOf, SESSION_STALE_MS, sessionEvent, takeJob, takePostcard, tickHost, WISH_WAIT_MS,
 } from '../hooks/host'
-import { DESKS, deskStatus, OH, seat } from '../hooks/office'
+import { DESKS, deskStatus, doingLine, OH, seat } from '../hooks/office'
 import { CHORES, infoPayload, mapPayload, statePayload } from '../hooks/web'
 
 const PANE = {
@@ -777,7 +777,7 @@ test('every session gets a desk and an apprentice who mirrors its work', async (
   sessionEvent(h, 's-1', { type: 'tool', tool: 'Edit' }, 0)
   expect(a.status).toBe('working')
   expect(deskStatus(h.world.office)[a.desk]).toBe('working')
-  expect(summary(h.world, 'hi')).toContain("I'm busy on cozy-village (main), writing code.")
+  expect(summary(h.world, 'hi')).toContain("I'm busy on cozy-village (main), editing a file.")
   sessionEvent(h, 's-1', { type: 'turn', seconds: 40, outcome: 'answer' }, 0)
   expect(a.status).toBe('done')
   sessionEvent(h, 's-2', { type: 'tests', passed: false }, 0)
@@ -801,7 +801,7 @@ test('Claude visits the apprentices, who tell what they are working on', async (
   for (let i = 0; i < 3000 && (h.world.queue.length || h.world.current); i++) tickHost(h, 0)
   expect(h.world.scene).toBe('office')
   const name = h.world.office.staff[0].name
-  expect(h.chat.some(l => l.who === name && l.text === "I'm busy on cozy-village (main), running commands.")).toBe(true)
+  expect(h.chat.some(l => l.who === name && l.text === "I'm busy on cozy-village (main), running a command.")).toBe(true)
   const state = statePayload(h.world, h.chat)
   expect(state.movers.map(m => m.k)).toEqual(['app:s-1', 'me'])
   expect(state.desks?.[h.world.office.staff[0].desk]).toBe('working')
@@ -821,4 +821,29 @@ test('with every desk taken, a new apprentice stands by the wall', async () => {
   expect(extra.desk).toBeLessThan(0)
   for (let i = 0; i < 300; i++) tickHost(h, 0)
   expect({ x: extra.x, y: extra.y }).toEqual(seat(extra.desk))
+})
+
+test('an apprentice says what kind of work their session is doing, from the tool name alone', async () => {
+  expect(doingLine('Read')).toBe('reading a file')
+  expect(doingLine('Edit')).toBe('editing a file')
+  expect(doingLine('Write')).toBe('writing a file')
+  expect(doingLine('Grep')).toBe('searching the code')
+  expect(doingLine('Glob')).toBe('looking for files')
+  expect(doingLine('PowerShell')).toBe('running a command')
+  expect(doingLine('WebSearch')).toBe('searching the web')
+  expect(doingLine('WebFetch')).toBe('reading a web page')
+  expect(doingLine('Agent')).toBe('asking a helper')
+  expect(doingLine('mcp__docs__read')).toBe('using a connector')
+  expect(doingLine('SomethingNew')).toBe('')
+
+  const h = createHost(undefined)
+  hello(h, 's-1', { repo: 'cozy-village', branch: 'main' }, 0)
+  const a = h.world.office.staff[0]
+  sessionEvent(h, 's-1', { type: 'tool', tool: 'Read' }, 0)
+  expect(a.bubble?.text).toBe('reading a file')
+  sessionEvent(h, 's-1', { type: 'tool', tool: 'Edit' }, 0)
+  expect(a.bubble?.text).toBe('editing a file')
+  expect(summary(h.world, 'hi')).toContain("I'm busy on cozy-village (main), editing a file.")
+  sessionEvent(h, 's-1', { type: 'turn', seconds: 5, outcome: 'answer' }, 0)
+  expect(a.doing).toBe('')
 })

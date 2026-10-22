@@ -24,6 +24,8 @@ export type Apprentice = Pt & {
   status: Status
   kind: ToolKind
   tool: string
+  /** What the current tool call does, from the tool's name ("editing a file"), or '' when unknown. */
+  doing: string
   /** Ticks left before `done` or `error` calms down to `idle`. */
   calm: number
   /** Ticks left at the coffee machine; 0 when not on a coffee break. */
@@ -121,6 +123,25 @@ export const toolKind = (tool: string): ToolKind => (/edit|write|notebook/i.test
       : /web|fetch|search/i.test(tool) ? 'web'
         : /agent|task|workflow/i.test(tool) ? 'agent' : 'other')
 
+/** The bubble for one tool call, from the tool's name alone: what the call acts on never leaves the session. */
+export function doingLine(tool: string): string {
+  if (/^mcp__/i.test(tool)) return 'using a connector'
+  if (/todo/i.test(tool)) return 'updating the to-do list'
+  if (/notebook/i.test(tool)) return 'editing a notebook'
+  if (/write/i.test(tool)) return 'writing a file'
+  if (/edit/i.test(tool)) return 'editing a file'
+  if (/bash|powershell|shell/i.test(tool)) return 'running a command'
+  if (/grep/i.test(tool)) return 'searching the code'
+  if (/glob/i.test(tool)) return 'looking for files'
+  if (/lsp/i.test(tool)) return 'looking through the code'
+  if (/read/i.test(tool)) return 'reading a file'
+  if (/websearch|web_search/i.test(tool)) return 'searching the web'
+  if (/web|fetch/i.test(tool)) return 'reading a web page'
+  if (/agent|task|workflow/i.test(tool)) return 'asking a helper'
+  if (/skill/i.test(tool)) return 'using a skill'
+  return ''
+}
+
 const say = (a: Apprentice, text: string, ticks = 30) => { a.bubble = { text, ticks } }
 const goTo = (a: Apprentice, to: Pt) => { a.path = officePath(a, to) }
 /** Whether the apprentice sits at their desk (facing the screen), not walking or on a break. */
@@ -142,7 +163,7 @@ export function joinOffice(o: Office, id: string, about: { repo: string; branch:
   const name = [...NAMES.slice(h % NAMES.length), ...NAMES].find(n => !names.has(n)) ?? `Intern ${o.staff.length + 1}`
   const a: Apprentice = {
     id, name, ...about, desk: free >= 0 ? free : standing, ...OFFICE_ENTRANCE, path: [],
-    status: 'idle', kind: 'other', tool: '', calm: 0, coffee: 0, rest: 0, leaving: false, look: h % LOOKS.length,
+    status: 'idle', kind: 'other', tool: '', doing: '', calm: 0, coffee: 0, rest: 0, leaving: false, look: h % LOOKS.length,
   }
   goTo(a, seat(a.desk))
   say(a, about.repo ? `Hi! I'm on ${about.repo} today.` : 'Hi! Reporting for work.', 40)
@@ -171,14 +192,18 @@ export function officeWork(o: Office, id: string, e: OfficeEvent) {
   if (!a || a.leaving) return
   if (e.type === 'tool') {
     const kind = toolKind(e.tool)
-    if (a.status !== 'working' || a.kind !== kind) say(a, pick(TYPING[kind]), 25)
+    const doing = doingLine(e.tool)
+    // every call with a known purpose gets its own bubble; unknown ones only when the kind of work changes
+    if (doing ? doing !== a.bubble?.text : a.status !== 'working' || a.kind !== kind) say(a, doing || pick(TYPING[kind]), 25)
     a.status = 'working'
     a.kind = kind
     a.tool = e.tool
+    a.doing = doing
     a.calm = 0
     if (a.coffee || !atSeat(a)) { a.coffee = 0; goTo(a, seat(a.desk)) }
   } else if (e.type === 'turn') {
     a.tool = ''
+    a.doing = ''
     if (e.outcome === 'answer') {
       a.status = 'done'
       a.calm = 60
@@ -215,7 +240,7 @@ export function runOffice(o: Office, tick: number) {
     if (!atSeat(a)) { goTo(a, seat(a.desk)); continue }
     a.rest = a.status === 'idle' ? a.rest + 1 : 0
     if (a.status === 'working') {
-      if (!a.bubble && tick % 45 === 0 && Math.random() < 0.5) say(a, pick(TYPING[a.kind]), 20)
+      if (!a.bubble && tick % 45 === 0 && Math.random() < 0.5) say(a, a.doing && Math.random() < 0.6 ? `still ${a.doing}` : pick(TYPING[a.kind]), 20)
     } else if (a.status === 'idle' && a.rest > 400 && Math.random() < 0.003) {
       a.rest = 0
       a.coffee = 60
@@ -231,6 +256,7 @@ export function runOffice(o: Office, tick: number) {
 /** How an apprentice describes their work, for a chat with Claude and the planner's prompt. */
 export function workLine(a: Apprentice): string {
   const on = a.repo ? ` on ${a.repo}${a.branch ? ` (${a.branch})` : ''}` : ''
+  if (a.status === 'working' && a.doing) return `I'm busy${on}, ${a.doing}.`
   if (a.status === 'working') return `I'm busy${on}, ${a.kind === 'edit' ? 'writing code' : a.kind === 'shell' ? 'running commands' : a.kind === 'read' ? 'reading code' : a.kind === 'web' ? 'searching the web' : a.kind === 'agent' ? 'with helpers' : 'working'}.`
   if (a.status === 'done') return `Just finished a task${on}!`
   if (a.status === 'error') return `Something went wrong${on}... I'll sort it out.`
